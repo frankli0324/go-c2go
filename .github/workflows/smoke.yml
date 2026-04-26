@@ -1,0 +1,91 @@
+name: smoke
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  generate:
+    name: go generate (${{ matrix.os }}-${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    env:
+      GOTOOLCHAIN: local
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            runner: ubuntu-24.04
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - os: macos
+            arch: amd64
+            runner: macos-15-intel
+          - os: macos
+            arch: arm64
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: go generate smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          printf '%s\n' \
+            'module generate-smoke' \
+            '' \
+            'go 1.26' \
+            '' \
+            'require github.com/frankli0324/go-c2go v0.0.0' \
+            '' \
+            "replace github.com/frankli0324/go-c2go => ${GITHUB_WORKSPACE}" >"${work}/go.mod"
+          printf '%s\n' \
+            'package sample' \
+            '' \
+            '//go:generate go run github.com/frankli0324/go-c2go/cmd/c2go -c sample.c' >"${work}/generate.go"
+          printf '%s\n' \
+            '//go:build ignore' \
+            '' \
+            'int add(int a, int b) { return a + b; }' \
+            'int first(const char *buf, int buf_len) { return buf_len > 0 ? buf[0] : 0; }' >"${work}/sample.c"
+          printf '%s\n' \
+            'package sample' \
+            '' \
+            'import "testing"' \
+            '' \
+            'func TestGeneratedC(t *testing.T) {' \
+            '	if Add(2, 3) != 5 {' \
+            '		t.Fatalf("Add(2, 3) != 5")' \
+            '	}' \
+            '	if First([]byte("abc")) != '\''a'\'' {' \
+            '		t.Fatalf("First did not read the first byte")' \
+            '	}' \
+            '}' >"${work}/sample_test.go"
+          cd "$work"
+          go generate ./...
+          test -s sample_c2go.go
+          test -s "sample_c2go_$(go env GOARCH).s"
+          ! grep -q '^//go:build' sample_c2go.go
+          go test -count=1 ./...
+      - name: amd64 immintrin smoke
+        if: matrix.arch == 'amd64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          cat >"${work}/immintrin.c" <<'EOF'
+          #include <immintrin.h>
+
+          void add4_intrin(float *dst, const float *a, const float *b) {
+          	__m128 av = _mm_loadu_ps(a);
+          	__m128 bv = _mm_loadu_ps(b);
+          	_mm_storeu_ps(dst, _mm_add_ps(av, bv));
+          }
+          EOF
+          go run ./cmd/c2go -src "${work}/immintrin.c" -arch "$(go env GOARCH)" -syntax auto -o "${work}/immintrin.s"
+          grep -q 'ADDPS' "${work}/immintrin.s"
