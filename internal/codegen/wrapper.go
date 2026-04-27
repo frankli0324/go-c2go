@@ -97,7 +97,7 @@ func renderWrapper(fn funcSpec, arch string) string {
 func renderParam(b *strings.Builder, p paramSpec, offset int, reg int, regs []string, arch string) int {
 	if p.Type.Bytes {
 		fmt.Fprintf(b, "\t%s %s+%d(FP), %s\n", ptrLoadOp(arch), p.Name, offset, regs[reg])
-		fmt.Fprintf(b, "\t%s %s+%d(FP), %s\n", intLoadOp(arch), p.Name, offset+8, regs[reg+1])
+		fmt.Fprintf(b, "\t%s %s+%d(FP), %s\n", ptrLoadOp(arch), p.Name, offset+8, regs[reg+1])
 		return reg + 2
 	}
 	fmt.Fprintf(b, "\t%s %s+%d(FP), %s\n", loadOp(p.Type, arch), p.Name, offset, regs[reg])
@@ -127,13 +127,6 @@ func ptrLoadOp(arch string) string {
 		return "MOVD"
 	}
 	return "MOVQ"
-}
-
-func intLoadOp(arch string) string {
-	if strings.TrimSpace(arch) == "arm64" {
-		return "MOVW"
-	}
-	return "MOVL"
 }
 
 func loadOp(t cType, arch string) string {

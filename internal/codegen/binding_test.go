@@ -14,7 +14,7 @@ func TestParseFunctionsAndRenderDecls(t *testing.T) {
 int add(int a, int b) { return a + b; }
 long add64(long a, long b) { return a + b; }
 void sink(int v) { (void)v; }
-int first(const char *buf, int buf_len) { return buf_len > 0 ? buf[0] : 0; }
+int first(const unsigned char *buf, size_t buf_len) { return buf_len > 0 ? buf[0] : 0; }
 char id_char(char v) { return v; }
 unsigned char id_uchar(unsigned char v) { return v; }
 short id_short(short v) { return v; }
@@ -24,12 +24,13 @@ long long id_ll(long long v) { return v; }
 unsigned long long id_ull(unsigned long long v) { return v; }
 void *id_ptr(void *p) { return p; }
 void *id_const_ptr(const void *p) { return (void*)p; }
+size_t id_size(size_t n) { return n; }
 `, goos, arch)
 	if err != nil {
 		t.Fatalf("parseFunctions() error = %v", err)
 	}
-	if len(funcs) != 13 {
-		t.Fatalf("len(funcs) = %d, want 13", len(funcs))
+	if len(funcs) != 14 {
+		t.Fatalf("len(funcs) = %d, want 14", len(funcs))
 	}
 	got := renderDecls("sample", arch, funcs)
 	mustContain(t, got,
@@ -47,6 +48,7 @@ void *id_const_ptr(const void *p) { return (void*)p; }
 		"func IdUll(v uint64) uint64",
 		"func IdPtr(p unsafe.Pointer) unsafe.Pointer",
 		"func IdConstPtr(p unsafe.Pointer) unsafe.Pointer",
+		"func IdSize(n uint) uint",
 	)
 	add64 := funcs[1]
 	wantAdd64 := "func Add64(a " + add64.Params[0].Type.GoName + ", b " + add64.Params[1].Type.GoName + ") " + add64.Return.GoName
@@ -61,7 +63,7 @@ func TestWrapAssemblyRenamesRawSymbolsAndAddsHostWrappers(t *testing.T) {
 	funcs, err := parseFunctions(`
 int add(int a, int b) { return a + b; }
 long add64(long a, long b) { return a + b; }
-int first(const char *buf, int buf_len) { return buf_len > 0 ? buf[0] : 0; }
+int first(const unsigned char *buf, size_t buf_len) { return buf_len > 0 ? buf[0] : 0; }
 unsigned short id_ushort(unsigned short v) { return v; }
 void *id_ptr(void *p) { return p; }
 `, goos, arch)
@@ -85,12 +87,36 @@ void *id_ptr(void *p) { return p; }
 
 func TestBytesReturnIsRejected(t *testing.T) {
 	goos, arch := currentTarget(t)
-	_, err := parseFunctions(`const char *bad(const char *buf, int buf_len) { return buf; }`, goos, arch)
+	_, err := parseFunctions(`const char *bad(const char *buf, size_t buf_len) { return buf; }`, goos, arch)
 	if err == nil {
 		t.Fatal("expected error for []byte return")
 	}
 	if !strings.Contains(err.Error(), "[]byte returns are not supported") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestByteParamRequiresConstCharPointerAndIntPair(t *testing.T) {
+	goos, arch := currentTarget(t)
+	funcs, err := parseFunctions(`
+int first(const unsigned char *buf, size_t n) { return n > 0 ? buf[0] : 0; }
+int second(int prefix, const char *data, size_t data_len) { return prefix + (int)data_len; }
+`, goos, arch)
+	if err != nil {
+		t.Fatalf("parseFunctions() error = %v", err)
+	}
+	if got := renderDecls("sample", arch, funcs); !strings.Contains(got, "func First(buf []byte) int32") || !strings.Contains(got, "func Second(prefix int32, data []byte) int32") {
+		t.Fatalf("generated declarations do not fold const char*, int into []byte\n%s", got)
+	}
+
+	for _, src := range []string{
+		`int bad(const char *buf) { return buf[0]; }`,
+		`int bad(const char *buf, int n) { return n; }`,
+	} {
+		_, err := parseFunctions(src, goos, arch)
+		if err == nil || !strings.Contains(err.Error(), "requires a following size_t length parameter") {
+			t.Fatalf("parseFunctions(%q) error = %v, want []byte length error", src, err)
+		}
 	}
 }
 
@@ -142,9 +168,9 @@ func textForSymbols(goos string, names []string) string {
 func hostWrapperChecks(arch string) []string {
 	common := []string{"TEXT ·Add(SB), NOSPLIT, $0-12", "TEXT ·Add64(SB), NOSPLIT, $0-", "TEXT ·First(SB), NOSPLIT, $0-28", "TEXT ·IdUshort(SB), NOSPLIT, $0-10", "TEXT ·IdPtr(SB), NOSPLIT, $0-16"}
 	if arch == asmconv.ArchARM64 {
-		return append(common, "MOVW a+0(FP), R0", "MOVW b+4(FP), R1", "MOVW R0, ret+8(FP)", "MOVD buf+0(FP), R0", "MOVW buf+8(FP), R1", "MOVW R0, ret+24(FP)", "MOVHU v+0(FP), R0", "MOVH R0, ret+8(FP)", "MOVD p+0(FP), R0", "MOVD R0, ret+8(FP)")
+		return append(common, "MOVW a+0(FP), R0", "MOVW b+4(FP), R1", "MOVW R0, ret+8(FP)", "MOVD buf+0(FP), R0", "MOVD buf+8(FP), R1", "MOVW R0, ret+24(FP)", "MOVHU v+0(FP), R0", "MOVH R0, ret+8(FP)", "MOVD p+0(FP), R0", "MOVD R0, ret+8(FP)")
 	}
-	return append(common, "MOVL a+0(FP), DI", "MOVL b+4(FP), SI", "MOVL AX, ret+8(FP)", "MOVQ buf+0(FP), DI", "MOVL buf+8(FP), SI", "MOVL AX, ret+24(FP)", "MOVWLZX v+0(FP), DI", "MOVW AX, ret+8(FP)", "MOVQ p+0(FP), DI", "MOVQ AX, ret+8(FP)")
+	return append(common, "MOVL a+0(FP), DI", "MOVL b+4(FP), SI", "MOVL AX, ret+8(FP)", "MOVQ buf+0(FP), DI", "MOVQ buf+8(FP), SI", "MOVL AX, ret+24(FP)", "MOVWLZX v+0(FP), DI", "MOVW AX, ret+8(FP)", "MOVQ p+0(FP), DI", "MOVQ AX, ret+8(FP)")
 }
 
 func mustContain(t *testing.T, text string, checks ...string) {

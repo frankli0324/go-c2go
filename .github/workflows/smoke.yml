@@ -51,8 +51,9 @@ jobs:
           printf '%s\n' \
             '//go:build ignore' \
             '' \
+            '#include <stddef.h>' \
             'int add(int a, int b) { return a + b; }' \
-            'int first(const char *buf, int buf_len) { return buf_len > 0 ? buf[0] : 0; }' >"${work}/sample.c"
+            'int first(const char *buf, size_t buf_len) { return buf_len > 0 ? buf[0] : 0; }' >"${work}/sample.c"
           printf '%s\n' \
             'package sample' \
             '' \

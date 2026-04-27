@@ -54,6 +54,7 @@ long                              -> target-width signed integer
 unsigned long                     -> target-width unsigned integer
 long long                         -> int64
 unsigned long long                -> uint64
+size_t                            -> uint
 void*/const void*                 -> unsafe.Pointer
 void                              -> no return / no params
 ```
@@ -61,7 +62,7 @@ void                              -> no return / no params
 `[]byte` input:
 
 ```c
-int first(const char *buf, int buf_len);
+int first(const unsigned char *buf, size_t buf_len);
 ```
 
 becomes:
@@ -70,13 +71,13 @@ becomes:
 func First(buf []byte) int32
 ```
 
-`const char *` returns are rejected.
+`const char *` and `const unsigned char *` returns are rejected.
 
 ## Constraints
 
 - C only. No C++, templates, namespaces, overloads, or name mangling.
 - Nolibc: default flags include `-ffreestanding -fno-builtin -fno-stack-protector`.
 - Do not call libc symbols like `malloc`, `memcpy`, or `printf`.
-- No structs, floating point, `size_t`, or general pointers.
+- No structs, floating point, or general pointers.
 - Max integer-register C ABI arguments: six on `amd64`, eight on `arm64`; `[]byte` counts as two.
 - Unsupported asm lines become `// UNSUPPORTED: ...`.

@@ -88,9 +88,10 @@ func TestRunPackageModeForGoGenerate(t *testing.T) {
 		"go.mod":      "module sample\n\ngo 1.26\n",
 		"sample.c": `
 //go:build ignore
+#include <stddef.h>
 int add(int a, int b) { return a + b; }
 long add64(long a, long b) { return a + b; }
-int first(const char *buf, int buf_len) { return buf_len > 0 ? buf[0] : 0; }
+int first(const unsigned char *buf, size_t buf_len) { return buf_len > 0 ? buf[0] : 0; }
 unsigned char id_u8(unsigned char v) { return v; }
 short id_i16(short v) { return v; }
 unsigned int id_u32(unsigned int v) { return v; }

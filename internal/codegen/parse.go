@@ -19,14 +19,15 @@ type paramSpec struct {
 }
 
 type cType struct {
-	GoName string
-	Size   int
-	Align  int
-	Move   string
-	Load   string
-	Void   bool
-	Bytes  bool
-	Unsafe bool
+	GoName  string
+	Size    int
+	Align   int
+	Move    string
+	Load    string
+	Void    bool
+	Bytes   bool
+	CharPtr bool
+	Unsafe  bool
 }
 
 var funcDeclRE = regexp.MustCompile(`(?m)^\s*([A-Za-z_][A-Za-z0-9_]*(?:\s+[A-Za-z_][A-Za-z0-9_]*)*?\s*\*?)\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*\{`)
@@ -41,7 +42,6 @@ var (
 	i64   = cType{GoName: "int64", Size: 8, Align: 8, Move: "MOVQ", Load: "MOVQ"}
 	u64   = cType{GoName: "uint64", Size: 8, Align: 8, Move: "MOVQ", Load: "MOVQ"}
 	bytes = cType{GoName: "[]byte", Size: 24, Align: 8, Bytes: true}
-	ptr   = cType{GoName: "unsafe.Pointer", Size: 8, Align: 8, Move: "MOVQ", Load: "MOVQ", Unsafe: true}
 )
 
 type cABI struct {
@@ -51,6 +51,7 @@ type cABI struct {
 	uint   cType
 	long   cType
 	ulong  cType
+	size   cType
 	ptr    cType
 }
 
@@ -62,7 +63,8 @@ func abiFor(goos, arch string) cABI {
 		uint:   u32,
 		long:   i64,
 		ulong:  u64,
-		ptr:    ptr,
+		size:   pointerSized("uint", false),
+		ptr:    pointerSized("unsafe.Pointer", true),
 	}
 	if goos == "windows" && (arch == "amd64" || arch == "arm64") {
 		abi.long = i32
@@ -71,30 +73,42 @@ func abiFor(goos, arch string) cABI {
 	return abi
 }
 
+func pointerSized(goName string, unsafe bool) cType {
+	return cType{GoName: goName, Size: 8, Align: 8, Move: "MOVQ", Load: "MOVQ", Unsafe: unsafe}
+}
+
 func supportedTypes(abi cABI) map[string]cType {
 	return map[string]cType{
-		"void":               {Void: true},
-		"char":               i8,
-		"signed char":        i8,
-		"unsigned char":      u8,
-		"short":              abi.short,
-		"signed short":       abi.short,
-		"unsigned short":     abi.ushort,
-		"int":                abi.int,
-		"signed":             abi.int,
-		"signed int":         abi.int,
-		"unsigned":           abi.uint,
-		"unsigned int":       abi.uint,
-		"long":               abi.long,
-		"signed long":        abi.long,
-		"unsigned long":      abi.ulong,
-		"long long":          i64,
-		"signed long long":   i64,
-		"unsigned long long": u64,
-		"const char*":        bytes,
-		"void*":              abi.ptr,
-		"const void*":        abi.ptr,
+		"void":                 {Void: true},
+		"char":                 i8,
+		"signed char":          i8,
+		"unsigned char":        u8,
+		"short":                abi.short,
+		"signed short":         abi.short,
+		"unsigned short":       abi.ushort,
+		"int":                  abi.int,
+		"signed":               abi.int,
+		"signed int":           abi.int,
+		"unsigned":             abi.uint,
+		"unsigned int":         abi.uint,
+		"long":                 abi.long,
+		"signed long":          abi.long,
+		"unsigned long":        abi.ulong,
+		"long long":            i64,
+		"signed long long":     i64,
+		"unsigned long long":   u64,
+		"size_t":               abi.size,
+		"const char*":          pchar(abi),
+		"const unsigned char*": pchar(abi),
+		"void*":                abi.ptr,
+		"const void*":          abi.ptr,
 	}
+}
+
+func pchar(abi cABI) cType {
+	t := abi.ptr
+	t.CharPtr = true
+	return t
 }
 
 func parseFunctions(src, goos, arch string) ([]funcSpec, error) {
@@ -125,8 +139,8 @@ func parseFunctions(src, goos, arch string) ([]funcSpec, error) {
 		if err != nil {
 			return nil, err
 		}
-		if ret.Bytes {
-			return nil, fmt.Errorf("%s returns const char *; []byte returns are not supported", m[2])
+		if ret.Bytes || ret.CharPtr {
+			return nil, fmt.Errorf("%s returns byte pointer; []byte returns are not supported", m[2])
 		}
 		params, err := parseParams(m[3], abi)
 		if err != nil {
@@ -149,7 +163,7 @@ type funcDecl struct {
 
 var typeWords = map[string]bool{
 	"const": true, "signed": true, "unsigned": true, "char": true,
-	"short": true, "int": true, "long": true, "void": true,
+	"short": true, "int": true, "long": true, "void": true, "size_t": true,
 }
 
 func funcDecls(src string) []funcDecl {
@@ -265,10 +279,11 @@ func parseParams(text string, abi cABI) ([]paramSpec, error) {
 		if p.Type.Void {
 			return nil, fmt.Errorf("void must be the only parameter")
 		}
-		if p.Type.Bytes {
-			if i+1 >= len(raw) || !sameType(raw[i+1].Type, abi.int) {
-				return nil, fmt.Errorf("[]byte parameter %q requires a following int length parameter", p.Name)
+		if p.Type.CharPtr {
+			if i+1 >= len(raw) || !sameType(raw[i+1].Type, abi.size) {
+				return nil, fmt.Errorf("[]byte parameter %q requires a following size_t length parameter", p.Name)
 			}
+			p.Type = bytes
 			i++
 		}
 		params = append(params, p)
@@ -305,7 +320,7 @@ func normalizeType(name string) string {
 }
 
 func sameType(a, b cType) bool {
-	return a.GoName == b.GoName && a.Size == b.Size && a.Void == b.Void && a.Bytes == b.Bytes && a.Unsafe == b.Unsafe
+	return a.GoName == b.GoName && a.Size == b.Size && a.Void == b.Void && a.Bytes == b.Bytes && a.CharPtr == b.CharPtr && a.Unsafe == b.Unsafe
 }
 
 func isIdent(s string) bool {
