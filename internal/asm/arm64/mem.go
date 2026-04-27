@@ -110,7 +110,7 @@ func loadMnemonic(op, dst string) string {
 	case strings.HasSuffix(op, "h"):
 		return "MOVHU"
 	case strings.HasPrefix(strings.ToLower(strings.TrimSpace(dst)), "w"):
-		return "MOVW"
+		return "MOVWU"
 	default:
 		return "MOVD"
 	}

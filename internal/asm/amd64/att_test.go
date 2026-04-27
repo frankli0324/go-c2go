@@ -73,6 +73,22 @@ setl r8b
 	mustContain(t, intel, "SETGT AL", "SETLS 8(SP)", "IMUL3L $7, SI, AX", "SETLT R8B")
 }
 
+func TestUnsignedWordLoadsStayZeroExtended(t *testing.T) {
+	att := translateATT(t, `
+movzbl (%rdi), %eax
+movl (%rsi), %eax
+`)
+	mustContain(t, att, "MOVBLZX (DI), AX", "MOVL (SI), AX")
+	mustNotContain(t, att, "MOVBLSX", "MOVLQSX")
+
+	intel := translateIntel(t, `
+movzx eax, byte ptr [rdi]
+mov eax, dword ptr [rsi]
+`)
+	mustContain(t, intel, "MOVZXB (DI), AX", "MOVL (SI), AX")
+	mustNotContain(t, intel, "MOVSXL", "MOVLQSX")
+}
+
 func TestIntelAVXWhitelistReorder(t *testing.T) {
 	out, unsupported := translateIntelAllowUnsupported(t, `
 vaddps ymm2, ymm0, ymm1
@@ -143,6 +159,15 @@ func mustContain(t *testing.T, text string, checks ...string) {
 	for _, want := range checks {
 		if !strings.Contains(text, want) {
 			t.Fatalf("output missing %q\n%s", want, text)
+		}
+	}
+}
+
+func mustNotContain(t *testing.T, text string, checks ...string) {
+	t.Helper()
+	for _, bad := range checks {
+		if strings.Contains(text, bad) {
+			t.Fatalf("output contains %q\n%s", bad, text)
 		}
 	}
 }

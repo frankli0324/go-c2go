@@ -67,6 +67,26 @@ add.2d v0, v0, v1
 	)
 }
 
+func TestUnsignedLoads(t *testing.T) {
+	out := translateARM64(t, `
+ldrb w0, [x1]
+ldrh w2, [x3]
+ldr w4, [x5]
+ldur w6, [x7, #4]
+ldr w8, [x9], #4
+ldrsw x10, [x11]
+`)
+	mustContain(t, out,
+		"MOVBU (R1), R0",
+		"MOVHU (R3), R2",
+		"MOVWU (R5), R4",
+		"MOVWU 4(R7), R6",
+		"MOVWU.P 4(R9), R8",
+		"MOVW (R11), R10",
+	)
+	mustNotContain(t, out, "MOVW (R5), R4", "MOVW 4(R7), R6", "MOVW.P (R9), R8")
+}
+
 func TestCBZBranches(t *testing.T) {
 	out := translateARM64(t, `
 cbz w0, LBB0_2

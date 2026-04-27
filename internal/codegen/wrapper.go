@@ -166,8 +166,10 @@ func loadOp(t cType, arch string) string {
 		return "MOVH"
 	case "uint16":
 		return "MOVHU"
-	case "int32", "uint32":
+	case "int32":
 		return "MOVW"
+	case "uint32":
+		return "MOVWU"
 	default:
 		return "MOVD"
 	}

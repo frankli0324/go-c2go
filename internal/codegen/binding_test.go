@@ -98,12 +98,14 @@ int strlen1(const char *s, size_t s_len) { return (int)s_len; }
 //go:c2go
 unsigned short id_ushort(unsigned short v) { return v; }
 //go:c2go
+unsigned int id_uint(unsigned int v) { return v; }
+//go:c2go
 void *id_ptr(void *p) { return p; }
 `, goos, arch)
 	if err != nil {
 		t.Fatalf("parseFunctions() error = %v", err)
 	}
-	asm := textForSymbols(goos, []string{"add", "add64", "first", "strlen1", "id_ushort", "id_ptr"})
+	asm := textForSymbols(goos, []string{"add", "add64", "first", "strlen1", "id_ushort", "id_uint", "id_ptr"})
 	got := wrapAssembly(asm, funcs, goos, arch)
 	mustContain(t, got, append([]string{
 		"TEXT c2go_add(SB), NOSPLIT|NOFRAME, $0",
@@ -111,6 +113,7 @@ void *id_ptr(void *p) { return p; }
 		"TEXT c2go_first(SB), NOSPLIT|NOFRAME, $0",
 		"TEXT c2go_strlen1(SB), NOSPLIT|NOFRAME, $0",
 		"TEXT c2go_id_ushort(SB), NOSPLIT|NOFRAME, $0",
+		"TEXT c2go_id_uint(SB), NOSPLIT|NOFRAME, $0",
 		"TEXT c2go_id_ptr(SB), NOSPLIT|NOFRAME, $0",
 		"CALL c2go_add(SB)",
 	}, hostWrapperChecks(arch)...)...)
@@ -215,11 +218,11 @@ func textForSymbols(goos string, names []string) string {
 }
 
 func hostWrapperChecks(arch string) []string {
-	common := []string{"TEXT ·Add(SB), NOSPLIT, $0-12", "TEXT ·Add64(SB), NOSPLIT, $0-", "TEXT ·First(SB), NOSPLIT, $0-28", "TEXT ·Strlen1(SB), NOSPLIT, $0-20", "TEXT ·IdUshort(SB), NOSPLIT, $0-10", "TEXT ·IdPtr(SB), NOSPLIT, $0-16"}
+	common := []string{"TEXT ·Add(SB), NOSPLIT, $0-12", "TEXT ·Add64(SB), NOSPLIT, $0-", "TEXT ·First(SB), NOSPLIT, $0-28", "TEXT ·Strlen1(SB), NOSPLIT, $0-20", "TEXT ·IdUshort(SB), NOSPLIT, $0-10", "TEXT ·IdUint(SB), NOSPLIT, $0-12", "TEXT ·IdPtr(SB), NOSPLIT, $0-16"}
 	if arch == asmconv.ArchARM64 {
-		return append(common, "MOVW a+0(FP), R0", "MOVW b+4(FP), R1", "MOVW R0, ret+8(FP)", "MOVD buf+0(FP), R0", "MOVD buf+8(FP), R1", "MOVW R0, ret+24(FP)", "MOVD s+0(FP), R0", "MOVD s+8(FP), R1", "MOVW R0, ret+16(FP)", "MOVHU v+0(FP), R0", "MOVH R0, ret+8(FP)", "MOVD p+0(FP), R0", "MOVD R0, ret+8(FP)")
+		return append(common, "MOVW a+0(FP), R0", "MOVW b+4(FP), R1", "MOVW R0, ret+8(FP)", "MOVD buf+0(FP), R0", "MOVD buf+8(FP), R1", "MOVW R0, ret+24(FP)", "MOVD s+0(FP), R0", "MOVD s+8(FP), R1", "MOVW R0, ret+16(FP)", "MOVHU v+0(FP), R0", "MOVH R0, ret+8(FP)", "MOVWU v+0(FP), R0", "MOVW R0, ret+8(FP)", "MOVD p+0(FP), R0", "MOVD R0, ret+8(FP)")
 	}
-	return append(common, "MOVL a+0(FP), DI", "MOVL b+4(FP), SI", "MOVL AX, ret+8(FP)", "MOVQ buf+0(FP), DI", "MOVQ buf+8(FP), SI", "MOVL AX, ret+24(FP)", "MOVQ s+0(FP), DI", "MOVQ s+8(FP), SI", "MOVL AX, ret+16(FP)", "MOVWLZX v+0(FP), DI", "MOVW AX, ret+8(FP)", "MOVQ p+0(FP), DI", "MOVQ AX, ret+8(FP)")
+	return append(common, "MOVL a+0(FP), DI", "MOVL b+4(FP), SI", "MOVL AX, ret+8(FP)", "MOVQ buf+0(FP), DI", "MOVQ buf+8(FP), SI", "MOVL AX, ret+24(FP)", "MOVQ s+0(FP), DI", "MOVQ s+8(FP), SI", "MOVL AX, ret+16(FP)", "MOVWLZX v+0(FP), DI", "MOVW AX, ret+8(FP)", "MOVL v+0(FP), DI", "MOVL AX, ret+8(FP)", "MOVQ p+0(FP), DI", "MOVQ AX, ret+8(FP)")
 }
 
 func mustContain(t *testing.T, text string, checks ...string) {
