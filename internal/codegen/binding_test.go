@@ -73,6 +73,15 @@ size_t id_size(size_t n) { return n; }
 	if strings.Contains(got, "//go:build") {
 		t.Fatalf("declarations should not have arch build tags\n%s", got)
 	}
+	fallback := renderFallback("sample", funcs)
+	mustContain(t, fallback,
+		"package sample",
+		"import \"unsafe\"",
+		"func Add(a int32, b int32) int32 {",
+		"func Sink(v int32) {",
+		"func First(buf []byte) int32 {",
+		"panic(\"c2go fallback Add is not implemented\")",
+	)
 }
 
 func TestWrapAssemblyRenamesRawSymbolsAndAddsHostWrappers(t *testing.T) {

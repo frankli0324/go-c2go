@@ -116,10 +116,16 @@ func generate(cfg config) error {
 		if err != nil {
 			return err
 		}
+		arches := bindingArches(asmPath, compileCfg.arch)
+		goPath := outputPath(cfg.goOutput, cfg.source, ".go")
+		generated.Go = addBuildConstraint(generated.Go, arches)
 		if err := writeFile(asmPath, generated.Asm); err != nil {
 			return err
 		}
-		return writeFile(outputPath(cfg.goOutput, cfg.source, ".go"), generated.Go)
+		if err := writeFile(goPath, generated.Go); err != nil {
+			return err
+		}
+		return writeFallbackFile(genericOutputPath(goPath), generated.Fallback, arches)
 	}
 	return writeFile(asmPath, output)
 }
@@ -154,6 +160,92 @@ func asmOutputPath(explicit, src, arch string) string {
 		return explicit
 	}
 	return strings.TrimSuffix(src, filepath.Ext(src)) + "_" + arch + ".s"
+}
+
+func genericOutputPath(goPath string) string {
+	ext := filepath.Ext(goPath)
+	if ext == "" {
+		return goPath + "_generic.go"
+	}
+	return strings.TrimSuffix(goPath, ext) + "_generic" + ext
+}
+
+func bindingArches(asmPath, arch string) []string {
+	seen := map[string]bool{arch: true}
+	dir, name := filepath.Dir(asmPath), filepath.Base(asmPath)
+	prefix, ok := strings.CutSuffix(name, arch+".s")
+	if ok {
+		if matches, err := filepath.Glob(filepath.Join(dir, prefix+"*.s")); err == nil {
+			for _, match := range matches {
+				base := filepath.Base(match)
+				if !strings.HasPrefix(base, prefix) || !strings.HasSuffix(base, ".s") {
+					continue
+				}
+				candidate := strings.TrimSuffix(strings.TrimPrefix(base, prefix), ".s")
+				if candidate != "" {
+					seen[candidate] = true
+				}
+			}
+		}
+	}
+	var arches []string
+	for _, candidate := range []string{asmconv.ArchAMD64, asmconv.ArchARM64} {
+		if seen[candidate] {
+			arches = append(arches, candidate)
+		}
+	}
+	if len(arches) == 0 {
+		return []string{arch}
+	}
+	return arches
+}
+
+func addBuildConstraint(src string, arches []string) string {
+	if len(arches) == 0 {
+		return src
+	}
+	return addBuildExpr(src, strings.Join(arches, " || "))
+}
+
+func addBuildExpr(src, expr string) string {
+	if strings.Contains(src, "\npackage ") {
+		return strings.Replace(src, "\npackage ", "\n//go:build "+expr+"\n\npackage ", 1)
+	}
+	return "//go:build " + expr + "\n\n" + src
+}
+
+func writeFallbackFile(path, body string, arches []string) error {
+	expr := fallbackBuildExpr(arches)
+	body = addBuildExpr(body, expr)
+	if existing, err := os.ReadFile(path); err == nil {
+		return writeFile(path, replaceBuildExpr(string(existing), expr))
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return writeFile(path, body)
+}
+
+func fallbackBuildExpr(arches []string) string {
+	parts := make([]string, 0, len(arches))
+	for _, arch := range arches {
+		parts = append(parts, "!"+arch)
+	}
+	return strings.Join(parts, " && ")
+}
+
+func replaceBuildExpr(src, expr string) string {
+	lines := strings.SplitAfter(src, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "//go:build ") {
+			lines[i] = "//go:build " + expr + "\n"
+			return strings.Join(lines, "")
+		}
+		if strings.HasPrefix(trimmed, "package ") {
+			break
+		}
+	}
+	return addBuildExpr(src, expr)
 }
 
 func resolveArch(arch string) string {

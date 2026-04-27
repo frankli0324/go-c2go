@@ -21,6 +21,12 @@ Generated from `sample.c`:
 
 - `sample_c2go.go`
 - `sample_c2go_${GOARCH}.s`
+- `sample_c2go_generic.go`
+
+`sample_c2go.go` is guarded by the generated asm architectures, for example
+`//go:build amd64 || arm64`. `sample_c2go_generic.go` is created with
+placeholder implementations and the inverse build tag, such as
+`//go:build !amd64 && !arm64`.
 
 ## Commands
 

@@ -13,16 +13,12 @@ var (
 )
 
 func renderDecls(pkg, arch string, funcs []funcSpec) string {
-	pkg = strings.TrimSpace(pkg)
-	if pkg == "" {
-		pkg = "main"
-	}
 	arch = strings.TrimSpace(arch)
 	if arch == "" {
 		arch = "amd64"
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n\npackage %s\n\n", generatedHeader, pkg)
+	fmt.Fprintf(&b, "%s\n\npackage %s\n\n", generatedHeader, packageName(pkg))
 	if usesUnsafe(funcs) {
 		b.WriteString("import \"unsafe\"\n\n")
 	}
@@ -30,18 +26,46 @@ func renderDecls(pkg, arch string, funcs []funcSpec) string {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		fmt.Fprintf(&b, "func %s(", fn.GoName)
-		for j, p := range fn.Params {
-			if j > 0 {
-				b.WriteString(", ")
-			}
-			fmt.Fprintf(&b, "%s %s", p.Name, p.Type.GoName)
+		fmt.Fprintln(&b, funcSignature(fn))
+	}
+	return b.String()
+}
+
+func renderFallback(pkg string, funcs []funcSpec) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "// c2go fallback placeholder; edit implementations for unsupported architectures.\n\npackage %s\n\n", packageName(pkg))
+	if usesUnsafe(funcs) {
+		b.WriteString("import \"unsafe\"\n\n")
+	}
+	for i, fn := range funcs {
+		if i > 0 {
+			b.WriteByte('\n')
 		}
-		b.WriteByte(')')
-		if fn.Return.Kind != voidType {
-			fmt.Fprintf(&b, " %s", fn.Return.GoName)
+		fmt.Fprintf(&b, "%s {\n\tpanic(%q)\n}\n", funcSignature(fn), "c2go fallback "+fn.GoName+" is not implemented")
+	}
+	return b.String()
+}
+
+func packageName(pkg string) string {
+	pkg = strings.TrimSpace(pkg)
+	if pkg == "" {
+		return "main"
+	}
+	return pkg
+}
+
+func funcSignature(fn funcSpec) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "func %s(", fn.GoName)
+	for j, p := range fn.Params {
+		if j > 0 {
+			b.WriteString(", ")
 		}
-		b.WriteByte('\n')
+		fmt.Fprintf(&b, "%s %s", p.Name, p.Type.GoName)
+	}
+	b.WriteByte(')')
+	if fn.Return.Kind != voidType {
+		fmt.Fprintf(&b, " %s", fn.Return.GoName)
 	}
 	return b.String()
 }

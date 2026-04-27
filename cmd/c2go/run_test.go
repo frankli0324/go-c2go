@@ -73,7 +73,7 @@ func TestRunGeneratesCallableGoPackage(t *testing.T) {
 	src := write(t, dir, "sample.c", "//go:build ignore\n\n//go:c2go\nint add(int a, int b) { return a + b; }\n//go:c2go\nlong add64(long a, long b) { return a + b; }\n")
 	asmPath, goPath := filepath.Join(dir, "sample_"+arch+".s"), filepath.Join(dir, "sample.go")
 	runOK(t, "-src", src, "-cc", "clang", "-arch", arch, "-syntax", "auto", "-pkg", "sample", "-o", asmPath, "-go", goPath)
-	mustContain(t, read(t, goPath), "package sample", "func Add(a int32, b int32) int32", "func Add64(")
+	mustContain(t, read(t, goPath), "//go:build "+arch, "package sample", "func Add(a int32, b int32) int32", "func Add64(")
 	mustContain(t, read(t, asmPath), packageAsmChecks(arch)...)
 	write(t, dir, "go.mod", "module sample\n\ngo 1.26\n")
 	write(t, dir, "sample_test.go", "package sample\n\nimport \"testing\"\n\nfunc TestGenerated(t *testing.T) { _ = Add(2, 3); _ = Add64(2, 3) }\n")
@@ -125,7 +125,39 @@ func TestGeneratedC(t *testing.T) {
 			t.Fatalf("expected generated file %s: %v", name, err)
 		}
 	}
+	mustContain(t, read(t, filepath.Join(dir, "sample_c2go.go")), "//go:build "+arch)
+	mustContain(t, read(t, filepath.Join(dir, "sample_c2go_generic.go")),
+		"//go:build !"+arch,
+		"func Add(a int32, b int32) int32 {",
+		"func First(buf []byte) int32 {",
+		"func Strlen1(s string) int32 {",
+	)
 	goTest(t, dir, goos, arch, "-v", "./...")
+	goTest(t, dir, "linux", "386", "-c", "./...")
+}
+
+func TestRunPackageModeMergesGeneratedArchTags(t *testing.T) {
+	goos, _ := requireHostCompilerTarget(t)
+	dir := t.TempDir()
+	writeAll(t, dir, map[string]string{
+		"go.mod":      "module sample\n\ngo 1.26\n",
+		"generate.go": "package sample\n",
+		"sample.c": `//go:build ignore
+
+//go:c2go
+int add(int a, int b) { return a + b; }
+`,
+	})
+	inDir(t, dir, func() {
+		runOK(t, "-cc", "clang", "-syntax", "auto", "-arch", asmconv.ArchAMD64, "-c", "sample.c")
+		mustContain(t, read(t, "sample_c2go.go"), "//go:build amd64")
+		mustContain(t, read(t, "sample_c2go_generic.go"), "//go:build !amd64")
+		runOK(t, "-cc", "clang", "-syntax", "auto", "-arch", asmconv.ArchARM64, "-c", "sample.c")
+		mustContain(t, read(t, "sample_c2go.go"), "//go:build amd64 || arm64")
+		mustContain(t, read(t, "sample_c2go_generic.go"), "//go:build !amd64 && !arm64")
+	})
+	goTest(t, dir, goos, asmconv.ArchAMD64, "-c", "./...")
+	goTest(t, dir, goos, asmconv.ArchARM64, "-c", "./...")
 }
 
 func TestRunPackageModeRequiresCFiles(t *testing.T) {

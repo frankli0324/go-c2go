@@ -77,8 +77,10 @@ jobs:
           cd "$work"
           go generate ./...
           test -s sample_c2go.go
+          test -s sample_c2go_generic.go
           test -s "sample_c2go_$(go env GOARCH).s"
-          ! grep -q '^//go:build' sample_c2go.go
+          grep -q "^//go:build .*$(go env GOARCH)" sample_c2go.go
+          grep -q "^//go:build !$(go env GOARCH)" sample_c2go_generic.go
           go test -count=1 ./...
       - name: amd64 immintrin smoke
         if: matrix.arch == 'amd64'

@@ -3,8 +3,9 @@ package codegen
 import "fmt"
 
 type Output struct {
-	Asm string
-	Go  string
+	Asm      string
+	Go       string
+	Fallback string
 }
 
 func GenerateBinding(src, asm, pkg, goos, arch string) (Output, error) {
@@ -17,8 +18,9 @@ func GenerateBinding(src, asm, pkg, goos, arch string) (Output, error) {
 	}
 	asm = wrapAssembly(asm, funcs, goos, arch)
 	return Output{
-		Asm: asm,
-		Go:  renderDecls(pkg, arch, funcs),
+		Asm:      asm,
+		Go:       renderDecls(pkg, arch, funcs),
+		Fallback: renderFallback(pkg, funcs),
 	}, nil
 }
 
