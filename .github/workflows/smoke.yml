@@ -52,8 +52,12 @@ jobs:
             '//go:build ignore' \
             '' \
             '#include <stddef.h>' \
+            '//go:c2go' \
             'int add(int a, int b) { return a + b; }' \
-            'int first(const char *buf, size_t buf_len) { return buf_len > 0 ? buf[0] : 0; }' >"${work}/sample.c"
+            '//go:c2go func First(buf string) int32' \
+            'int first(const char *buf, size_t buf_len) { return buf_len > 0 ? buf[0] : 0; }' \
+            '//go:c2go' \
+            'int first_byte(const unsigned char *buf, size_t buf_len) { return buf_len > 0 ? buf[0] : 0; }' >"${work}/sample.c"
           printf '%s\n' \
             'package sample' \
             '' \
@@ -63,8 +67,11 @@ jobs:
             '	if Add(2, 3) != 5 {' \
             '		t.Fatalf("Add(2, 3) != 5")' \
             '	}' \
-            '	if First([]byte("abc")) != '\''a'\'' {' \
-            '		t.Fatalf("First did not read the first byte")' \
+            '	if First("abc") != '\''a'\'' {' \
+            '		t.Fatalf("First did not read the first string byte")' \
+            '	}' \
+            '	if FirstByte([]byte("abc")) != '\''a'\'' {' \
+            '		t.Fatalf("FirstByte did not read the first byte")' \
             '	}' \
             '}' >"${work}/sample_test.go"
           cd "$work"

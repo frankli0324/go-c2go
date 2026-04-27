@@ -70,7 +70,7 @@ void add4_intrin(float *dst, const float *a, const float *b) {
 func TestRunGeneratesCallableGoPackage(t *testing.T) {
 	goos, arch := requireHostCompilerTarget(t)
 	dir := t.TempDir()
-	src := write(t, dir, "sample.c", "//go:build ignore\n\nint add(int a, int b) { return a + b; }\nlong add64(long a, long b) { return a + b; }\n")
+	src := write(t, dir, "sample.c", "//go:build ignore\n\n//go:c2go\nint add(int a, int b) { return a + b; }\n//go:c2go\nlong add64(long a, long b) { return a + b; }\n")
 	asmPath, goPath := filepath.Join(dir, "sample_"+arch+".s"), filepath.Join(dir, "sample.go")
 	runOK(t, "-src", src, "-cc", "clang", "-arch", arch, "-syntax", "auto", "-pkg", "sample", "-o", asmPath, "-go", goPath)
 	mustContain(t, read(t, goPath), "package sample", "func Add(a int32, b int32) int32", "func Add64(")
@@ -89,19 +89,28 @@ func TestRunPackageModeForGoGenerate(t *testing.T) {
 		"sample.c": `
 //go:build ignore
 #include <stddef.h>
+//go:c2go
 int add(int a, int b) { return a + b; }
+//go:c2go
 long add64(long a, long b) { return a + b; }
+//go:c2go
 int first(const unsigned char *buf, size_t buf_len) { return buf_len > 0 ? buf[0] : 0; }
+//go:c2go func Strlen1(s string) int32
+int strlen1(const char *s, size_t s_len) { return (int)s_len; }
+//go:c2go
 unsigned char id_u8(unsigned char v) { return v; }
+//go:c2go
 short id_i16(short v) { return v; }
+//go:c2go
 unsigned int id_u32(unsigned int v) { return v; }
+//go:c2go
 long long id_i64(long long v) { return v; }
 `,
 		"sample_test.go": `package sample
 import "testing"
 func TestGeneratedC(t *testing.T) {
 	if Add(2, 3) != 5 || Add64(2, 3) != 5 || First([]byte("abc")) != 'a' ||
-		IdU8(42) != 42 || IdI16(-42) != -42 || IdU32(42) != 42 || IdI64(-42) != -42 {
+		Strlen1("abcd") != 4 || IdU8(42) != 42 || IdI16(-42) != -42 || IdU32(42) != 42 || IdI64(-42) != -42 {
 		t.Fatal("generated binding returned wrong value")
 	}
 }

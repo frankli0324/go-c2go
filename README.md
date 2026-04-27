@@ -62,6 +62,7 @@ void                              -> no return / no params
 `[]byte` input:
 
 ```c
+//go:c2go
 int first(const unsigned char *buf, size_t buf_len);
 ```
 
@@ -69,6 +70,13 @@ becomes:
 
 ```go
 func First(buf []byte) int32
+```
+
+Use `//go:c2go func ...` to override the generated Go signature.
+
+```c
+//go:c2go func Raw(data string) int32
+int raw(const char *data, size_t data_len);
 ```
 
 `const char *` and `const unsigned char *` returns are rejected.
@@ -79,5 +87,5 @@ func First(buf []byte) int32
 - Nolibc: default flags include `-ffreestanding -fno-builtin -fno-stack-protector`.
 - Do not call libc symbols like `malloc`, `memcpy`, or `printf`.
 - No structs, floating point, or general pointers.
-- Max integer-register C ABI arguments: six on `amd64`, eight on `arm64`; `[]byte` counts as two.
+- Max integer-register C ABI arguments: six on `amd64`, eight on `arm64`; `[]byte` and `string` count as two.
 - Unsupported asm lines become `// UNSUPPORTED: ...`.

@@ -38,7 +38,7 @@ func renderDecls(pkg, arch string, funcs []funcSpec) string {
 			fmt.Fprintf(&b, "%s %s", p.Name, p.Type.GoName)
 		}
 		b.WriteByte(')')
-		if !fn.Return.Void {
+		if fn.Return.Kind != voidType {
 			fmt.Fprintf(&b, " %s", fn.Return.GoName)
 		}
 		b.WriteByte('\n')
@@ -87,7 +87,7 @@ func renderWrapper(fn funcSpec, arch string) string {
 		reg = renderParam(&b, p, paramOffsets[i], reg, regs, arch)
 	}
 	fmt.Fprintf(&b, "\tCALL %s(SB)\n", rawSymbol(fn.CName))
-	if !fn.Return.Void {
+	if fn.Return.Kind != voidType {
 		fmt.Fprintf(&b, "\t%s %s, ret+%d(FP)\n", storeOp(fn.Return, arch), returnReg(arch), retOffset)
 	}
 	b.WriteString("\tRET\n")
@@ -95,7 +95,7 @@ func renderWrapper(fn funcSpec, arch string) string {
 }
 
 func renderParam(b *strings.Builder, p paramSpec, offset int, reg int, regs []string, arch string) int {
-	if p.Type.Bytes {
+	if p.Type.Kind == bytesType || p.Type.Kind == stringType {
 		fmt.Fprintf(b, "\t%s %s+%d(FP), %s\n", ptrLoadOp(arch), p.Name, offset, regs[reg])
 		fmt.Fprintf(b, "\t%s %s+%d(FP), %s\n", ptrLoadOp(arch), p.Name, offset+8, regs[reg+1])
 		return reg + 2
@@ -174,7 +174,7 @@ func frameOffsets(fn funcSpec) ([]int, int, int) {
 		offset += p.Type.Size
 	}
 	retOffset := offset
-	if !fn.Return.Void {
+	if fn.Return.Kind != voidType {
 		offset = align(offset, 8)
 		retOffset = offset
 		offset += fn.Return.Size

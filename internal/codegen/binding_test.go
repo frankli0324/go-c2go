@@ -11,26 +11,42 @@ import (
 func TestParseFunctionsAndRenderDecls(t *testing.T) {
 	goos, arch := currentTarget(t)
 	funcs, err := parseFunctions(`
+//go:c2go
 int add(int a, int b) { return a + b; }
+//go:c2go
 long add64(long a, long b) { return a + b; }
+//go:c2go
 void sink(int v) { (void)v; }
+//go:c2go
 int first(const unsigned char *buf, size_t buf_len) { return buf_len > 0 ? buf[0] : 0; }
+//go:c2go func Strlen1(s string) int32
+int strlen1(const char *s, size_t s_len) { return (int)s_len; }
+//go:c2go
 char id_char(char v) { return v; }
+//go:c2go
 unsigned char id_uchar(unsigned char v) { return v; }
+//go:c2go
 short id_short(short v) { return v; }
+//go:c2go
 unsigned short id_ushort(unsigned short v) { return v; }
+//go:c2go
 unsigned int id_uint(unsigned int v) { return v; }
+//go:c2go
 long long id_ll(long long v) { return v; }
+//go:c2go
 unsigned long long id_ull(unsigned long long v) { return v; }
+//go:c2go
 void *id_ptr(void *p) { return p; }
+//go:c2go
 void *id_const_ptr(const void *p) { return (void*)p; }
+//go:c2go
 size_t id_size(size_t n) { return n; }
 `, goos, arch)
 	if err != nil {
 		t.Fatalf("parseFunctions() error = %v", err)
 	}
-	if len(funcs) != 14 {
-		t.Fatalf("len(funcs) = %d, want 14", len(funcs))
+	if len(funcs) != 15 {
+		t.Fatalf("len(funcs) = %d, want 15", len(funcs))
 	}
 	got := renderDecls("sample", arch, funcs)
 	mustContain(t, got,
@@ -39,6 +55,7 @@ size_t id_size(size_t n) { return n; }
 		"func Add(a int32, b int32) int32",
 		"func Sink(v int32)",
 		"func First(buf []byte) int32",
+		"func Strlen1(s string) int32",
 		"func IdChar(v int8) int8",
 		"func IdUchar(v uint8) uint8",
 		"func IdShort(v int16) int16",
@@ -61,21 +78,29 @@ size_t id_size(size_t n) { return n; }
 func TestWrapAssemblyRenamesRawSymbolsAndAddsHostWrappers(t *testing.T) {
 	goos, arch := currentTarget(t)
 	funcs, err := parseFunctions(`
+//go:c2go
 int add(int a, int b) { return a + b; }
+//go:c2go
 long add64(long a, long b) { return a + b; }
+//go:c2go
 int first(const unsigned char *buf, size_t buf_len) { return buf_len > 0 ? buf[0] : 0; }
+//go:c2go func Strlen1(s string) int32
+int strlen1(const char *s, size_t s_len) { return (int)s_len; }
+//go:c2go
 unsigned short id_ushort(unsigned short v) { return v; }
+//go:c2go
 void *id_ptr(void *p) { return p; }
 `, goos, arch)
 	if err != nil {
 		t.Fatalf("parseFunctions() error = %v", err)
 	}
-	asm := textForSymbols(goos, []string{"add", "add64", "first", "id_ushort", "id_ptr"})
+	asm := textForSymbols(goos, []string{"add", "add64", "first", "strlen1", "id_ushort", "id_ptr"})
 	got := wrapAssembly(asm, funcs, goos, arch)
 	mustContain(t, got, append([]string{
 		"TEXT c2go_add(SB), NOSPLIT|NOFRAME, $0",
 		"TEXT c2go_add64(SB), NOSPLIT|NOFRAME, $0",
 		"TEXT c2go_first(SB), NOSPLIT|NOFRAME, $0",
+		"TEXT c2go_strlen1(SB), NOSPLIT|NOFRAME, $0",
 		"TEXT c2go_id_ushort(SB), NOSPLIT|NOFRAME, $0",
 		"TEXT c2go_id_ptr(SB), NOSPLIT|NOFRAME, $0",
 		"CALL c2go_add(SB)",
@@ -87,36 +112,51 @@ void *id_ptr(void *p) { return p; }
 
 func TestBytesReturnIsRejected(t *testing.T) {
 	goos, arch := currentTarget(t)
-	_, err := parseFunctions(`const char *bad(const char *buf, size_t buf_len) { return buf; }`, goos, arch)
+	_, err := parseFunctions(`//go:c2go
+const char *bad(const char *buf, size_t buf_len) { return buf; }`, goos, arch)
 	if err == nil {
-		t.Fatal("expected error for []byte return")
+		t.Fatal("expected error for char pointer return")
 	}
-	if !strings.Contains(err.Error(), "[]byte returns are not supported") {
+	if !strings.Contains(err.Error(), "[]byte/string returns are not supported") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestByteParamRequiresConstCharPointerAndIntPair(t *testing.T) {
+func TestCharPointerParamsRequireSizeTLength(t *testing.T) {
 	goos, arch := currentTarget(t)
 	funcs, err := parseFunctions(`
+//go:c2go
 int first(const unsigned char *buf, size_t n) { return n > 0 ? buf[0] : 0; }
+//go:c2go
 int second(int prefix, const char *data, size_t data_len) { return prefix + (int)data_len; }
+//go:c2go func Raw(data []byte) int32
+int raw(const char *data, size_t data_len) { return (int)data_len; }
+//go:c2go func Strlen1(s string) int32
+int strlen1(const char *s, size_t s_len) { return (int)s_len; }
 `, goos, arch)
 	if err != nil {
 		t.Fatalf("parseFunctions() error = %v", err)
 	}
-	if got := renderDecls("sample", arch, funcs); !strings.Contains(got, "func First(buf []byte) int32") || !strings.Contains(got, "func Second(prefix int32, data []byte) int32") {
-		t.Fatalf("generated declarations do not fold const char*, int into []byte\n%s", got)
+	if got := renderDecls("sample", arch, funcs); !strings.Contains(got, "func First(buf []byte) int32") || !strings.Contains(got, "func Second(prefix int32, data []byte) int32") || !strings.Contains(got, "func Raw(data []byte) int32") || !strings.Contains(got, "func Strlen1(s string) int32") {
+		t.Fatalf("generated declarations do not fold char pointer pairs\n%s", got)
 	}
 
 	for _, src := range []string{
-		`int bad(const char *buf) { return buf[0]; }`,
-		`int bad(const char *buf, int n) { return n; }`,
+		`//go:c2go
+int bad(const char *buf) { return buf[0]; }`,
+		`//go:c2go
+int bad(const char *buf, int n) { return n; }`,
 	} {
 		_, err := parseFunctions(src, goos, arch)
 		if err == nil || !strings.Contains(err.Error(), "requires a following size_t length parameter") {
-			t.Fatalf("parseFunctions(%q) error = %v, want []byte length error", src, err)
+			t.Fatalf("parseFunctions(%q) error = %v, want length error", src, err)
 		}
+	}
+
+	_, err = parseFunctions(`//go:c2go func Bad(buf string, extra int32) int32
+int bad(const char *buf, size_t n) { return n; }`, goos, arch)
+	if err == nil || !strings.Contains(err.Error(), "parameter count mismatch") {
+		t.Fatalf("parseFunctions() error = %v, want signature mismatch", err)
 	}
 }
 
@@ -166,11 +206,11 @@ func textForSymbols(goos string, names []string) string {
 }
 
 func hostWrapperChecks(arch string) []string {
-	common := []string{"TEXT ·Add(SB), NOSPLIT, $0-12", "TEXT ·Add64(SB), NOSPLIT, $0-", "TEXT ·First(SB), NOSPLIT, $0-28", "TEXT ·IdUshort(SB), NOSPLIT, $0-10", "TEXT ·IdPtr(SB), NOSPLIT, $0-16"}
+	common := []string{"TEXT ·Add(SB), NOSPLIT, $0-12", "TEXT ·Add64(SB), NOSPLIT, $0-", "TEXT ·First(SB), NOSPLIT, $0-28", "TEXT ·Strlen1(SB), NOSPLIT, $0-20", "TEXT ·IdUshort(SB), NOSPLIT, $0-10", "TEXT ·IdPtr(SB), NOSPLIT, $0-16"}
 	if arch == asmconv.ArchARM64 {
-		return append(common, "MOVW a+0(FP), R0", "MOVW b+4(FP), R1", "MOVW R0, ret+8(FP)", "MOVD buf+0(FP), R0", "MOVD buf+8(FP), R1", "MOVW R0, ret+24(FP)", "MOVHU v+0(FP), R0", "MOVH R0, ret+8(FP)", "MOVD p+0(FP), R0", "MOVD R0, ret+8(FP)")
+		return append(common, "MOVW a+0(FP), R0", "MOVW b+4(FP), R1", "MOVW R0, ret+8(FP)", "MOVD buf+0(FP), R0", "MOVD buf+8(FP), R1", "MOVW R0, ret+24(FP)", "MOVD s+0(FP), R0", "MOVD s+8(FP), R1", "MOVW R0, ret+16(FP)", "MOVHU v+0(FP), R0", "MOVH R0, ret+8(FP)", "MOVD p+0(FP), R0", "MOVD R0, ret+8(FP)")
 	}
-	return append(common, "MOVL a+0(FP), DI", "MOVL b+4(FP), SI", "MOVL AX, ret+8(FP)", "MOVQ buf+0(FP), DI", "MOVQ buf+8(FP), SI", "MOVL AX, ret+24(FP)", "MOVWLZX v+0(FP), DI", "MOVW AX, ret+8(FP)", "MOVQ p+0(FP), DI", "MOVQ AX, ret+8(FP)")
+	return append(common, "MOVL a+0(FP), DI", "MOVL b+4(FP), SI", "MOVL AX, ret+8(FP)", "MOVQ buf+0(FP), DI", "MOVQ buf+8(FP), SI", "MOVL AX, ret+24(FP)", "MOVQ s+0(FP), DI", "MOVQ s+8(FP), SI", "MOVL AX, ret+16(FP)", "MOVWLZX v+0(FP), DI", "MOVW AX, ret+8(FP)", "MOVQ p+0(FP), DI", "MOVQ AX, ret+8(FP)")
 }
 
 func mustContain(t *testing.T, text string, checks ...string) {
