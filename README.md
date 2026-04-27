@@ -95,3 +95,8 @@ int raw(const char *data, size_t data_len);
 - No structs, floating point, or general pointers.
 - Max integer-register C ABI arguments: six on `amd64`, eight on `arm64`; `[]byte` and `string` count as two.
 - Unsupported asm lines become `// UNSUPPORTED: ...`.
+
+## Reading Materials
+
+- https://go.dev/doc/asm
+- https://9p.io/sys/doc/asm.html

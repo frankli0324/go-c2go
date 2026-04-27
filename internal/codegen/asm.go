@@ -60,6 +60,10 @@ func (b *asmFileBuilder) addLine(line string) error {
 		b.addGlobl(line)
 		return nil
 	}
+	if strings.HasPrefix(line, "PCALIGN ") && b.current == nil {
+		b.pendingComments = append(b.pendingComments, "\t"+line)
+		return nil
+	}
 	if strings.HasPrefix(line, "//") {
 		b.addComment(line)
 		return nil
@@ -68,11 +72,8 @@ func (b *asmFileBuilder) addLine(line string) error {
 		b.addLabel(label)
 		return nil
 	}
-	if value, ok := parseQuad(line); ok {
-		return b.addData(value)
-	}
-	if value, ok := parseLong(line); ok {
-		return b.addData32(value)
+	if value, size, ok := parseDataValue(line); ok {
+		return b.addData(value, size)
 	}
 	return b.addInstruction(line)
 }
@@ -136,18 +137,11 @@ func (b *asmFileBuilder) addInstruction(line string) error {
 	return nil
 }
 
-func (b *asmFileBuilder) addData(value string) error {
+func (b *asmFileBuilder) addData(value string, size int) error {
 	if b.current != nil {
-		return b.addInstruction(".quad " + value)
+		return b.addInstruction(fmt.Sprintf(".%s %s", dataDirective(size), value))
 	}
-	return b.addDataSized(value, 8)
-}
-
-func (b *asmFileBuilder) addData32(value string) error {
-	if b.current != nil {
-		return b.addInstruction(".long " + value)
-	}
-	return b.addDataSized(value, 4)
+	return b.addDataSized(value, size)
 }
 
 func (b *asmFileBuilder) addDataSized(value string, size int) error {
@@ -158,11 +152,7 @@ func (b *asmFileBuilder) addDataSized(value string, size int) error {
 		b.currentData.name = plan9LocalLabel(b.pendingLabel)
 		b.pendingLabel = ""
 	}
-	if size == 4 {
-		b.currentData.values = append(b.currentData.values, ".long "+value)
-	} else {
-		b.currentData.values = append(b.currentData.values, value)
-	}
+	b.currentData.values = append(b.currentData.values, fmt.Sprintf("%d:%s", size, value))
 	return nil
 }
 
@@ -177,6 +167,9 @@ func (b *asmFileBuilder) startFunc(label string) {
 
 func (b *asmFileBuilder) finishFunc() {
 	if b.current != nil {
+		if !b.ended {
+			b.current.body = append(b.current.body, "\tRET")
+		}
 		b.funcs = append(b.funcs, *b.current)
 		b.current = nil
 		b.ended = false
@@ -197,14 +190,10 @@ func render(fileComments []string, data []asmData, funcs []asmFunc) string {
 	out = append(out, "")
 	for _, datum := range data {
 		offset := 0
-		for _, value := range datum.values {
-			if strings.HasPrefix(value, ".long ") {
-				out = append(out, fmt.Sprintf("DATA %s+%d(SB)/4, $%s", datum.name, offset, strings.TrimPrefix(value, ".long ")))
-				offset += 4
-				continue
-			}
-			out = append(out, fmt.Sprintf("DATA %s+%d(SB)/8, $%s", datum.name, offset, value))
-			offset += 8
+		for _, item := range datum.values {
+			size, value := splitDataItem(item)
+			out = append(out, fmt.Sprintf("DATA %s+%d(SB)/%d, $%s", datum.name, offset, size, value))
+			offset += size
 		}
 		out = append(out, fmt.Sprintf("GLOBL %s(SB), RODATA|NOPTR, $%d", datum.name, dataSize(datum.values)), "")
 	}
@@ -217,8 +206,12 @@ func render(fileComments []string, data []asmData, funcs []asmFunc) string {
 		if frame > 0 {
 			flags = strings.ReplaceAll(flags, "|NOFRAME", "")
 		}
+		frameText := "$0"
+		if frame > 0 {
+			frameText = fmt.Sprintf("$%d-0", frame)
+		}
 		out = append(out, fn.comments...)
-		out = append(out, fmt.Sprintf("TEXT %s, %s, $%d", fn.name, flags, frame))
+		out = append(out, fmt.Sprintf("TEXT %s, %s, %s", fn.name, flags, frameText))
 		out = append(out, body...)
 	}
 	return strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n"
@@ -273,13 +266,27 @@ func popReg(line string) (string, bool) {
 func dataSize(values []string) int {
 	n := 0
 	for _, value := range values {
-		if strings.HasPrefix(value, ".long ") {
-			n += 4
-		} else {
-			n += 8
-		}
+		size, _ := splitDataItem(value)
+		n += size
 	}
 	return n
+}
+
+func splitDataItem(item string) (int, string) {
+	sizeText, value, ok := strings.Cut(item, ":")
+	if !ok {
+		return 8, item
+	}
+	switch sizeText {
+	case "1":
+		return 1, value
+	case "2":
+		return 2, value
+	case "4":
+		return 4, value
+	default:
+		return 8, value
+	}
 }
 
 func withSB(name string) string {
@@ -317,20 +324,40 @@ func parseLabel(line string) (string, bool) {
 	return label, true
 }
 
-func parseQuad(line string) (string, bool) {
+func parseDataValue(line string) (string, int, bool) {
 	fields := strings.Fields(line)
-	if len(fields) < 2 || strings.ToLower(fields[0]) != ".quad" {
-		return "", false
+	if len(fields) < 2 {
+		return "", 0, false
 	}
-	return strings.TrimSpace(strings.TrimPrefix(line, fields[0])), true
+	size := 0
+	switch strings.ToLower(fields[0]) {
+	case ".byte":
+		size = 1
+	case ".short", ".word":
+		size = 2
+	case ".long":
+		size = 4
+	case ".quad", ".xword":
+		size = 8
+	default:
+		return "", 0, false
+	}
+	return strings.TrimSpace(strings.TrimPrefix(line, fields[0])), size, true
 }
 
-func parseLong(line string) (string, bool) {
-	fields := strings.Fields(line)
-	if len(fields) < 2 || strings.ToLower(fields[0]) != ".long" {
-		return "", false
+func dataDirective(size int) string {
+	switch size {
+	case 1:
+		return "byte"
+	case 2:
+		return "short"
+	case 4:
+		return "long"
+	case 8:
+		return "quad"
+	default:
+		panic(fmt.Sprintf("invalid data directive size %d", size))
 	}
-	return strings.TrimSpace(strings.TrimPrefix(line, fields[0])), true
 }
 
 func looksLikeFunctionLabel(label string) bool {

@@ -60,7 +60,7 @@ func TestRenderAsmFileSingleLabelWithoutGlobl(t *testing.T) {
 func TestRenderAsmFileKeepsPreambleCommentsWithNextFunction(t *testing.T) {
 	input := strings.TrimSpace(`
 // .globl _add
-// .p2align 4, 0x90
+	PCALIGN $16
 _add:
 RET
 
@@ -75,7 +75,7 @@ RET
 		t.Fatalf("RenderAsmFile() error = %v", err)
 	}
 	checks := []string{
-		"// .globl _add\n// .p2align 4, 0x90\nTEXT _add(SB), NOSPLIT|NOFRAME, $0",
+		"// .globl _add\n\tPCALIGN $16\nTEXT _add(SB), NOSPLIT|NOFRAME, $0",
 		"// .globl _sub\n// .type _sub,@function\nTEXT _sub(SB), NOSPLIT|NOFRAME, $0",
 	}
 	for _, want := range checks {
@@ -88,9 +88,52 @@ RET
 	}
 }
 
+func TestRenderAsmFileRewritesAMD64PushPopFrame(t *testing.T) {
+	input := strings.TrimSpace(`
+foo:
+PUSHQ BP
+MOVQ SP, BP
+CALL bar(SB)
+POPQ BP
+RET
+`) + "\n"
+
+	got, err := RenderAsmFile(input)
+	if err != nil {
+		t.Fatalf("RenderAsmFile() error = %v", err)
+	}
+	checks := []string{
+		"TEXT foo(SB), NOSPLIT, $8-0",
+		"\tMOVQ BP, 0(SP)",
+		"\tCALL bar(SB)",
+		"\tMOVQ 0(SP), BP",
+	}
+	for _, want := range checks {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "NOFRAME") {
+		t.Fatalf("non-zero frame must not use NOFRAME\n%s", got)
+	}
+}
+
+func TestRenderAsmFileTerminatesText(t *testing.T) {
+	got, err := RenderAsmFile("foo:\nMOVQ AX, BX\n")
+	if err != nil {
+		t.Fatalf("RenderAsmFile() error = %v", err)
+	}
+	if !strings.Contains(got, "\tMOVQ AX, BX\n\tRET\n") {
+		t.Fatalf("unterminated TEXT should get RET\n%s", got)
+	}
+}
+
 func TestRenderAsmFileEmitsQuadData(t *testing.T) {
 	input := strings.TrimSpace(`
 LCPI0_0:
+.byte 7
+.short 8
+.long 9
 .quad 1
 .quad -2
 
@@ -105,9 +148,12 @@ RET
 		t.Fatalf("RenderAsmFile() error = %v", err)
 	}
 	checks := []string{
-		"DATA LCPI0_0+0(SB)/8, $1",
-		"DATA LCPI0_0+8(SB)/8, $-2",
-		"GLOBL LCPI0_0(SB), RODATA|NOPTR, $16",
+		"DATA LCPI0_0+0(SB)/1, $7",
+		"DATA LCPI0_0+1(SB)/2, $8",
+		"DATA LCPI0_0+3(SB)/4, $9",
+		"DATA LCPI0_0+7(SB)/8, $1",
+		"DATA LCPI0_0+15(SB)/8, $-2",
+		"GLOBL LCPI0_0(SB), RODATA|NOPTR, $23",
 		"TEXT _load(SB), NOSPLIT|NOFRAME, $0",
 		"\tVMOVDQA LCPI0_0(SB), Y0",
 	}
@@ -119,6 +165,15 @@ RET
 	if strings.Contains(got, "TEXT LCPI0_0(SB)") {
 		t.Fatalf("data label should not be rendered as TEXT\n%s", got)
 	}
+}
+
+func TestDataDirectiveRejectsInvalidSize(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("dataDirective should panic for invalid size")
+		}
+	}()
+	_ = dataDirective(3)
 }
 
 func TestRenderAsmFileSanitizesELFLocalLabels(t *testing.T) {

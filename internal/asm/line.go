@@ -1,6 +1,9 @@
 package asm
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 var pseudoComment = map[string]struct{}{
 	".globl": {}, ".global": {}, ".type": {}, ".size": {}, ".section": {}, ".align": {}, ".text": {}, ".data": {}, ".bss": {},
@@ -87,10 +90,21 @@ func handlePseudo(indent, line string) (string, bool, bool) {
 		return "", true, false
 	}
 	if op == ".p2align" {
-		return indent + "// " + line, false, false
+		args := strings.TrimSpace(strings.TrimPrefix(line, fields[0]))
+		align, _, _ := strings.Cut(args, ",")
+		align = strings.TrimSpace(align)
+		if align == "" {
+			align = "0"
+		}
+		shift, err := strconv.Atoi(align)
+		if err != nil || shift < 3 || shift > 11 {
+			return indent + "// " + line, false, false
+		}
+		return indent + "PCALIGN $" + strconv.Itoa(1<<shift), false, false
 	}
-	if op == ".quad" || op == ".xword" {
-		return indent + ".quad " + strings.TrimSpace(strings.TrimPrefix(line, fields[0])), false, false
+	switch op {
+	case ".byte", ".short", ".word", ".long", ".quad", ".xword":
+		return indent + op + " " + strings.TrimSpace(strings.TrimPrefix(line, fields[0])), false, false
 	}
 	if _, ok := pseudoComment[op]; ok {
 		return indent + "// " + line, false, false

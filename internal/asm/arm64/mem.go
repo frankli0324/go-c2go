@@ -160,7 +160,19 @@ func register(name string) (string, error) {
 	if err != nil || n < 0 || n > 30 {
 		return "", fmt.Errorf("unsupported arm64 register %q", name)
 	}
+	if reservedRegister(n) {
+		return "", fmt.Errorf("reserved arm64 register %q", name)
+	}
 	return fmt.Sprintf("R%d", n), nil
+}
+
+func reservedRegister(n int) bool {
+	switch n {
+	case 18, 26, 27, 28, 29, 30:
+		return true
+	default:
+		return false
+	}
 }
 
 func (t *Translator) memory(arg string) (string, error) {

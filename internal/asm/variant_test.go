@@ -138,13 +138,18 @@ func TestTranslateMetadataAndComments(t *testing.T) {
 .globl _foo
 .section __TEXT,__text
 .p2align 4, 0x90
+.byte 1
+.short 2
+.word 3
+.long 4
+.xword 5
 .unknown meta
 ret
 `)+"\n")
 	if count := unsupportedCount(t, err); count != 1 {
 		t.Fatalf("UnsupportedError.Count = %d, want 1\n%s", count, out)
 	}
-	mustContain(t, out, "// .globl _foo", "// .section __TEXT,__text", "// .p2align 4, 0x90", "// UNSUPPORTED: .unknown meta", "RET")
+	mustContain(t, out, "// .globl _foo", "// .section __TEXT,__text", "PCALIGN $16", ".byte 1", ".short 2", ".word 3", ".long 4", ".xword 5", "// UNSUPPORTED: .unknown meta", "RET")
 	mustNotContain(t, out, ".cfi_startproc", ".file 1 \"x.c\"", ".loc 1 1 0", ".ident", ".addrsig", ".build_version", ".subsections_via_symbols", "%bb.0")
 	checkTranslate(t, ATT, "amd64", "movq %rsp, %rbp # save frame\n", []string{"MOVQ SP, BP"}, []string{"save frame"})
 	checkTranslate(t, Intel, "amd64", "mov rbp, rsp ; intel form\n", []string{"MOVQ SP, BP"}, []string{"intel form"})

@@ -23,7 +23,7 @@ func compileC(cfg compileConfig) (string, error) {
 	if compiler == "" {
 		compiler = "clang"
 	}
-	cmd := exec.Command(compiler, compileArgs(compiler, cfg)...)
+	cmd := exec.Command(compiler, compileArgs(compiler, cfg, isGNUCompiler(compiler))...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -37,11 +37,24 @@ func compileC(cfg compileConfig) (string, error) {
 	return stdout.String(), nil
 }
 
-func compileArgs(compiler string, cfg compileConfig) []string {
+func compileArgs(compiler string, cfg compileConfig, gnuCompiler bool) []string {
 	args := []string{"-O3", "-S", "-x", "c", cfg.sourcePath, "-o", "-"}
 	args = append(defaultCompileFlags(), args...)
 	if cfg.arch == "arm64" {
-		args = append([]string{"-ffixed-x18"}, args...)
+		args = append([]string{
+			"-ffixed-x18", // Go asm doc: R18_PLATFORM is reserved on Apple ARM64 platforms.
+			"-ffixed-x26", // Go obj/arm64: REGCTXT, the closure context register.
+			"-ffixed-x27", // Go asm doc: R27 is reserved by the compiler and linker.
+			"-ffixed-x28", // Go asm doc: R28 is reserved; obj/arm64 names it REGG.
+		}, args...)
+	}
+	if cfg.arch == "amd64" && gnuCompiler {
+		args = append([]string{
+			"-ffixed-r12", // Go obj/x86: REGENTRYTMP0, ABIInternal entry scratch register.
+			"-ffixed-r13", // Go obj/x86: REGENTRYTMP1, ABIInternal entry scratch register.
+			"-ffixed-r14", // Go obj/x86: REGG, the ABIInternal goroutine register.
+			"-ffixed-r15", // Go obj/x86: REGEXT, used around external and dynlink code.
+		}, args...)
 	}
 	if syntax := x86AsmSyntaxFlags(cfg); len(syntax) > 0 {
 		args = append(syntax, args...)
@@ -50,6 +63,15 @@ func compileArgs(compiler string, cfg compileConfig) []string {
 		args = append([]string{"-target", target}, args...)
 	}
 	return append(args, cfg.extraFlags...)
+}
+
+func isGNUCompiler(compiler string) bool {
+	version, err := exec.Command(compiler, "--version").CombinedOutput()
+	if err != nil {
+		return false
+	}
+	lower := strings.ToLower(string(version))
+	return strings.Contains(lower, "gcc") && !strings.Contains(lower, "clang")
 }
 
 func defaultCompileFlags() []string {

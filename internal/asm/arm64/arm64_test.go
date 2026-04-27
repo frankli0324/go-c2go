@@ -115,12 +115,12 @@ msub x6, x7, x8, x9
 adds w10, w11, #1
 adcs x12, x13, x14
 sbc x15, x16, x17
-sbcs w18, w19, w20
+sbcs w4, w19, w20
 neg w21, w22
 negs x23, x24
-ubfx w25, w26, #2, #6
-sbfx x27, x28, #3, #9
-adr x29, Ltmp0
+ubfx w25, w24, #2, #6
+sbfx x6, x25, #3, #9
+adr x24, Ltmp0
 ldrsw x9, [x10]
 `)
 	mustContain(t, out,
@@ -134,14 +134,32 @@ ldrsw x9, [x10]
 		"ADDSW $1, R11, R10",
 		"ADCS R14, R13, R12",
 		"SBC R17, R16, R15",
-		"SBCSW R20, R19, R18",
+		"SBCSW R20, R19, R4",
 		"NEGW R22, R21",
 		"NEGS R24, R23",
-		"UBFXW $2, R26, $6, R25",
-		"SBFX $3, R28, $9, R27",
-		"ADR Ltmp0, R29",
+		"UBFXW $2, R24, $6, R25",
+		"SBFX $3, R25, $9, R6",
+		"ADR Ltmp0, R24",
 		"MOVW (R10), R9",
 	)
+}
+
+func TestReservedRegistersRejected(t *testing.T) {
+	for _, line := range []string{
+		"add x0, x18, x1",
+		"add x26, x0, x1",
+		"ldr x0, [x27]",
+		"str x28, [x0]",
+		"adr x29, Ltmp0",
+		"mov x30, x0",
+	} {
+		var tr Translator
+		out, bad := tr.TranslateInstruction("", line)
+		if !bad {
+			t.Fatalf("TranslateInstruction(%q) = %q, want unsupported", line, out)
+		}
+		mustContain(t, out, "// UNSUPPORTED: "+line)
+	}
 }
 
 func TestVectorOpLaneCoverage(t *testing.T) {
