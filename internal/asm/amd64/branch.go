@@ -69,6 +69,18 @@ func cmovMnemonic(op string) (string, bool) {
 	return "CMOV" + strings.ToUpper(string(width)) + cond, true
 }
 
+func setCCMnemonic(op string) (string, bool) {
+	lower := strings.ToLower(strings.TrimSpace(op))
+	if !strings.HasPrefix(lower, "set") || len(lower) <= len("set") {
+		return "", false
+	}
+	cond, ok := conditionSuffix(lower[len("set"):])
+	if !ok {
+		return "", false
+	}
+	return "SET" + cond, true
+}
+
 func conditionSuffix(cond string) (string, bool) {
 	switch cond {
 	case "e", "z":

@@ -1,6 +1,7 @@
 package amd64
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/frankli0324/go-c2go/internal/asm/asmutil"
@@ -28,6 +29,7 @@ const (
 	opATTSized
 	opIntelSized
 	opCMOV
+	opSETCC
 )
 
 type opHandler func(opContext) (string, []string, error)
@@ -86,11 +88,55 @@ var opSpecs = map[string]opSpec{
 	"cvttsd2si":    {typ: opSIMDExact, mn: "CVTTSD2SI"},
 	"vextracti128": {typ: opSIMDExact, mn: "VEXTRACTI128"},
 	"vinserti128":  {typ: opSIMDExact, mn: "VINSERTI128"},
+	"vpaddb":       {typ: opSIMDExact, mn: "VPADDB"},
+	"vpaddd":       {typ: opSIMDExact, mn: "VPADDD"},
+	"vpaddq":       {typ: opSIMDExact, mn: "VPADDQ"},
+	"vpaddw":       {typ: opSIMDExact, mn: "VPADDW"},
+	"vpand":        {typ: opSIMDExact, mn: "VPAND"},
+	"vpandn":       {typ: opSIMDExact, mn: "VPANDN"},
+	"vpavgb":       {typ: opSIMDExact, mn: "VPAVGB"},
+	"vpavgw":       {typ: opSIMDExact, mn: "VPAVGW"},
 	"vpbroadcastq": {typ: opSIMDExact, mn: "VPBROADCASTQ"},
+	"vpcmpeqb":     {typ: opSIMDExact, mn: "VPCMPEQB"},
+	"vpcmpeqd":     {typ: opSIMDExact, mn: "VPCMPEQD"},
+	"vpcmpeqq":     {typ: opSIMDExact, mn: "VPCMPEQQ"},
+	"vpcmpeqw":     {typ: opSIMDExact, mn: "VPCMPEQW"},
+	"vpcmpgtb":     {typ: opSIMDExact, mn: "VPCMPGTB"},
+	"vpcmpgtd":     {typ: opSIMDExact, mn: "VPCMPGTD"},
+	"vpcmpgtq":     {typ: opSIMDExact, mn: "VPCMPGTQ"},
+	"vpcmpgtw":     {typ: opSIMDExact, mn: "VPCMPGTW"},
 	"vpermq":       {typ: opSIMDExact, mn: "VPERMQ"},
 	"vpextrq":      {typ: opSIMDExact, mn: "VPEXTRQ"},
+	"vpmaxsb":      {typ: opSIMDExact, mn: "VPMAXSB"},
+	"vpmaxsd":      {typ: opSIMDExact, mn: "VPMAXSD"},
+	"vpmaxsw":      {typ: opSIMDExact, mn: "VPMAXSW"},
+	"vpmaxub":      {typ: opSIMDExact, mn: "VPMAXUB"},
+	"vpmaxud":      {typ: opSIMDExact, mn: "VPMAXUD"},
+	"vpmaxuw":      {typ: opSIMDExact, mn: "VPMAXUW"},
+	"vpminsb":      {typ: opSIMDExact, mn: "VPMINSB"},
+	"vpminsd":      {typ: opSIMDExact, mn: "VPMINSD"},
+	"vpminsw":      {typ: opSIMDExact, mn: "VPMINSW"},
+	"vpminub":      {typ: opSIMDExact, mn: "VPMINUB"},
+	"vpminud":      {typ: opSIMDExact, mn: "VPMINUD"},
+	"vpminuw":      {typ: opSIMDExact, mn: "VPMINUW"},
+	"vpmulld":      {typ: opSIMDExact, mn: "VPMULLD"},
+	"vpmullw":      {typ: opSIMDExact, mn: "VPMULLW"},
+	"vpmuludq":     {typ: opSIMDExact, mn: "VPMULUDQ"},
 	"vpor":         {typ: opSIMDExact, mn: "VPOR"},
+	"vpshufb":      {typ: opSIMDExact, mn: "VPSHUFB"},
 	"vpshufd":      {typ: opSIMDExact, mn: "VPSHUFD"},
+	"vpsllw":       {typ: opSIMDExact, mn: "VPSLLW"},
+	"vpslld":       {typ: opSIMDExact, mn: "VPSLLD"},
+	"vpsllq":       {typ: opSIMDExact, mn: "VPSLLQ"},
+	"vpsraw":       {typ: opSIMDExact, mn: "VPSRAW"},
+	"vpsrad":       {typ: opSIMDExact, mn: "VPSRAD"},
+	"vpsrlw":       {typ: opSIMDExact, mn: "VPSRLW"},
+	"vpsrld":       {typ: opSIMDExact, mn: "VPSRLD"},
+	"vpsrlq":       {typ: opSIMDExact, mn: "VPSRLQ"},
+	"vpsubb":       {typ: opSIMDExact, mn: "VPSUBB"},
+	"vpsubd":       {typ: opSIMDExact, mn: "VPSUBD"},
+	"vpsubq":       {typ: opSIMDExact, mn: "VPSUBQ"},
+	"vpsubw":       {typ: opSIMDExact, mn: "VPSUBW"},
 	"vpxor":        {typ: opSIMDExact, mn: "VPXOR"},
 	"vzeroupper":   {typ: opSIMDExact, mn: "VZEROUPPER"},
 }
@@ -142,6 +188,9 @@ func specFor(syntax syntaxKind, op string) opSpec {
 	if strings.HasPrefix(op, "cmov") {
 		return opSpec{typ: opCMOV}
 	}
+	if strings.HasPrefix(op, "set") {
+		return opSpec{typ: opSETCC}
+	}
 	if syntax == syntaxIntel {
 		return opSpec{typ: opIntelSized}
 	}
@@ -169,6 +218,15 @@ func simdExactHandler(ctx opContext) (string, []string, error) {
 func simdSuffixHandler(ctx opContext) (string, []string, error) {
 	ops, err := convertSIMDOperands(ctx)
 	return strings.ToUpper(ctx.op), ops, err
+}
+
+func setCCHandler(ctx opContext) (string, []string, error) {
+	mnemonic, ok := setCCMnemonic(ctx.op)
+	if !ok {
+		return "", nil, fmt.Errorf("unsupported setcc mnemonic %q", ctx.op)
+	}
+	ops, err := convertOperands(ctx)
+	return mnemonic, ops, err
 }
 
 func convertOperands(ctx opContext) ([]string, error) {

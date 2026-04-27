@@ -36,6 +36,21 @@ var avxThreeOpWhitelist = map[string]struct{}{
 	"vmulss": {}, "vmulsd": {},
 	"vdivss": {}, "vdivsd": {},
 	"vcvtss2sd": {}, "vcvtsd2ss": {},
+	"vpaddb": {}, "vpaddw": {}, "vpaddd": {}, "vpaddq": {},
+	"vpsubb": {}, "vpsubw": {}, "vpsubd": {}, "vpsubq": {},
+	"vpmullw": {}, "vpmulld": {}, "vpmuludq": {},
+	"vpand": {}, "vpandn": {}, "vpor": {}, "vpxor": {},
+	"vpsllw": {}, "vpslld": {}, "vpsllq": {},
+	"vpsrlw": {}, "vpsrld": {}, "vpsrlq": {},
+	"vpsraw": {}, "vpsrad": {},
+	"vpcmpeqb": {}, "vpcmpeqw": {}, "vpcmpeqd": {}, "vpcmpeqq": {},
+	"vpcmpgtb": {}, "vpcmpgtw": {}, "vpcmpgtd": {}, "vpcmpgtq": {},
+	"vpmaxsb": {}, "vpmaxsw": {}, "vpmaxsd": {},
+	"vpmaxub": {}, "vpmaxuw": {}, "vpmaxud": {},
+	"vpminsb": {}, "vpminsw": {}, "vpminsd": {},
+	"vpminub": {}, "vpminuw": {}, "vpminud": {},
+	"vpavgb": {}, "vpavgw": {},
+	"vpshufb": {},
 }
 
 func isWhitelistedAVXThreeOp(op string) bool {

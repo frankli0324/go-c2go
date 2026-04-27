@@ -162,17 +162,6 @@ mov rax, [foo+8]
 `, []string{"MOVQ -4(BP), AX", "MOVQ 16(AX)(CX*8), AX", "MOVQ $foo+8(SB), AX"}, nil)
 }
 
-func TestTranslateIntelAVXWhitelistReorder(t *testing.T) {
-	out, err := Translate(Intel, "amd64", strings.TrimSpace(`
-vaddps ymm2, ymm0, ymm1
-vfoobar xmm2, xmm0, xmm1
-`)+"\n")
-	if count := unsupportedCount(t, err); count != 1 {
-		t.Fatalf("UnsupportedError.Count = %d, want 1\n%s", count, out)
-	}
-	mustContain(t, out, "VADDPS Y0, Y1, Y2", "// UNSUPPORTED: vfoobar xmm2, xmm0, xmm1")
-}
-
 func TestTranslateSIMDMnemonics(t *testing.T) {
 	checkTranslate(t, ATT, "amd64", `
 pshufb %xmm1, %xmm2

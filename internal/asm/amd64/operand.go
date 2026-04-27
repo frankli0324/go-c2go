@@ -50,28 +50,43 @@ func intelRegWidth(arg string) (string, bool) {
 }
 
 var legacyRegisterGroups = []struct{ reg, names string }{
-	{"AX", "rax eax ax al"},
-	{"BX", "rbx ebx bx bl"},
-	{"CX", "rcx ecx cx cl"},
-	{"DX", "rdx edx dx dl"},
-	{"SI", "rsi esi si sil"},
-	{"DI", "rdi edi di dil"},
-	{"BP", "rbp ebp bp bpl"},
-	{"SP", "rsp esp sp spl"},
+	{"AL", "al"},
+	{"BL", "bl"},
+	{"CL", "cl"},
+	{"DL", "dl"},
+	{"SPB", "spl"},
+	{"BPB", "bpl"},
+	{"SIB", "sil"},
+	{"DIB", "dil"},
+	{"AH", "ah"},
+	{"BH", "bh"},
+	{"CH", "ch"},
+	{"DH", "dh"},
+	{"AX", "rax eax ax"},
+	{"BX", "rbx ebx bx"},
+	{"CX", "rcx ecx cx"},
+	{"DX", "rdx edx dx"},
+	{"SI", "rsi esi si"},
+	{"DI", "rdi edi di"},
+	{"BP", "rbp ebp bp"},
+	{"SP", "rsp esp sp"},
 }
 
 var widthRegisterGroups = []struct{ width, names string }{
 	{"Q", "rax rbx rcx rdx rsi rdi rbp rsp"},
 	{"L", "eax ebx ecx edx esi edi ebp esp"},
 	{"W", "ax bx cx dx si di bp sp"},
-	{"B", "al bl cl dl sil dil bpl spl"},
+	{"B", "al bl cl dl sil dil bpl spl ah bh ch dh"},
 }
 
 func numberedRegister(key string) (string, bool) {
 	if n, prefix, ok := simdRegister(key); ok {
 		return prefix + strconv.Itoa(n), true
 	}
-	if n, _, ok := numberedGPR(key); ok {
+	if n, suffix, ok := numberedGPR(key); ok {
+		if suffix == "b" {
+			return "R" + strconv.Itoa(n) + "B", true
+		}
 		return "R" + strconv.Itoa(n), true
 	}
 	return "", false
@@ -81,7 +96,7 @@ func simdRegister(key string) (int, string, bool) {
 	for _, spec := range []struct {
 		asm, plan9 string
 		max        int
-	}{{"xmm", "X", 15}, {"ymm", "Y", 15}, {"zmm", "Z", 31}} {
+	}{{"xmm", "X", 31}, {"ymm", "Y", 31}, {"zmm", "Z", 31}, {"mm", "M", 7}, {"k", "K", 7}} {
 		if strings.HasPrefix(key, spec.asm) {
 			n, err := strconv.Atoi(strings.TrimPrefix(key, spec.asm))
 			return n, spec.plan9, err == nil && n >= 0 && n <= spec.max

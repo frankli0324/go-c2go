@@ -37,12 +37,18 @@ var attHandlers = map[opType]opHandler{
 	opSIMDSuffix: simdSuffixHandler,
 	opATTSized:   attSizedHandler,
 	opCMOV:       attCMOVHandler,
+	opSETCC:      setCCHandler,
 }
 
 func attSizedHandler(ctx opContext) (string, []string, error) {
 	if len(ctx.op) > 1 && strings.ContainsRune("bwlq", rune(ctx.op[len(ctx.op)-1])) {
 		ops, err := convertOperands(ctx)
-		return strings.ToUpper(ctx.op), ops, err
+		suffix := ctx.op[len(ctx.op)-1:]
+		mnemonic := strings.ToUpper(ctx.op)
+		if ctx.op[:len(ctx.op)-1] == "imul" && len(ctx.ops) == 3 {
+			mnemonic = "IMUL3" + strings.ToUpper(suffix)
+		}
+		return mnemonic, ops, err
 	}
 	return "", nil, fmt.Errorf("unsupported mnemonic %q", ctx.op)
 }

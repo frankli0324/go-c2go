@@ -34,6 +34,7 @@ var intelHandlers = map[opType]opHandler{
 	opSIMDSuffix: simdSuffixHandler,
 	opIntelSized: intelSizedHandler,
 	opCMOV:       intelCMOVHandler,
+	opSETCC:      setCCHandler,
 }
 
 func intelSizedHandler(ctx opContext) (string, []string, error) {
@@ -42,7 +43,11 @@ func intelSizedHandler(ctx opContext) (string, []string, error) {
 		return "", nil, fmt.Errorf("cannot infer width for %q", ctx.op)
 	}
 	ops, err := convertOperands(ctx)
-	return strings.ToUpper(ctx.op) + suffix, ops, err
+	mnemonic := strings.ToUpper(ctx.op) + suffix
+	if ctx.op == "imul" && len(ctx.ops) == 3 {
+		mnemonic = "IMUL3" + suffix
+	}
+	return mnemonic, ops, err
 }
 
 func intelCMOVHandler(ctx opContext) (string, []string, error) {
@@ -114,7 +119,11 @@ func reorderIntelOperands(op string, operands []string) ([]string, error) {
 	if len(operands) == 2 {
 		return []string{operands[1], operands[0]}, nil
 	}
-	if len(operands) == 3 && strings.HasPrefix(strings.ToLower(op), "v") {
+	lower := strings.ToLower(op)
+	if len(operands) == 3 && lower == "imul" {
+		return []string{operands[2], operands[1], operands[0]}, nil
+	}
+	if len(operands) == 3 && strings.HasPrefix(lower, "v") {
 		if !isWhitelistedAVXThreeOp(op) {
 			return nil, fmt.Errorf("unknown AVX three-operand instruction %q", op)
 		}
