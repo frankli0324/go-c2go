@@ -67,6 +67,63 @@ add.2d v0, v0, v1
 	)
 }
 
+func TestCBZBranches(t *testing.T) {
+	out := translateARM64(t, `
+cbz w0, LBB0_2
+cbnz x1, .LBB0_3
+tbz w2, #3, LBB0_4
+tbnz x3, #4, .LBB0_5
+`)
+	mustContain(t, out,
+		"CBZ R0, LBB0_2",
+		"CBNZ R1, .LBB0_3",
+		"TBZ $3, R2, LBB0_4",
+		"TBNZ $4, R3, .LBB0_5",
+	)
+	mustNotContain(t, out, "LBB0_2(SB)", ".LBB0_3(SB)", "LBB0_4(SB)", ".LBB0_5(SB)")
+}
+
+func TestScalarOpCoverage(t *testing.T) {
+	out := translateARM64(t, `
+tst x0, x1
+tst x0, x1, lsl #3
+cmn x2, #7
+cset w3, lt
+sdiv x0, x1, x2
+udiv w3, w4, w5
+msub x6, x7, x8, x9
+adds w10, w11, #1
+adcs x12, x13, x14
+sbc x15, x16, x17
+sbcs w18, w19, w20
+neg w21, w22
+negs x23, x24
+ubfx w25, w26, #2, #6
+sbfx x27, x28, #3, #9
+adr x29, Ltmp0
+ldrsw x9, [x10]
+`)
+	mustContain(t, out,
+		"TST R1, R0",
+		"TST R1<<3, R0",
+		"CMN $7, R2",
+		"CSET LT, R3",
+		"SDIV R2, R1, R0",
+		"UDIVW R5, R4, R3",
+		"MSUB R8, R9, R7, R6",
+		"ADDSW $1, R11, R10",
+		"ADCS R14, R13, R12",
+		"SBC R17, R16, R15",
+		"SBCSW R20, R19, R18",
+		"NEGW R22, R21",
+		"NEGS R24, R23",
+		"UBFXW $2, R26, $6, R25",
+		"SBFX $3, R28, $9, R27",
+		"ADR Ltmp0, R29",
+		"MOVW (R10), R9",
+	)
+}
+
 func TestVectorOpLaneCoverage(t *testing.T) {
 	out := translateARM64(t, `
 add.8b v0, v1, v2
@@ -117,6 +174,15 @@ func mustContain(t *testing.T, text string, checks ...string) {
 	for _, want := range checks {
 		if !strings.Contains(text, want) {
 			t.Fatalf("output missing %q\n%s", want, text)
+		}
+	}
+}
+
+func mustNotContain(t *testing.T, text string, checks ...string) {
+	t.Helper()
+	for _, bad := range checks {
+		if strings.Contains(text, bad) {
+			t.Fatalf("output contains %q\n%s", bad, text)
 		}
 	}
 }

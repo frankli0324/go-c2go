@@ -104,14 +104,18 @@ const (
 	opLiteral opType = iota
 	opBranch
 	opCondBranch
+	opRegBranch
+	opBitBranch
 	opPair
 	opFloatMove
 	opADRP
+	opADR
 	opRightLeft
 	opSrcDst
 	opRotate
 	opMulAdd
 	opCondSelect
+	opCondSet
 	opBitfield
 	opMove
 	opMoveKeep
@@ -136,13 +140,21 @@ var opSpecs = map[string]spec{
 	"b.hs": {typ: opCondBranch, mn: "BHS"},
 	"b.mi": {typ: opCondBranch, mn: "BMI"},
 	"b.pl": {typ: opCondBranch, mn: "BPL"},
+	"cbz":  {typ: opRegBranch, mn: "CBZ"},
+	"cbnz": {typ: opRegBranch, mn: "CBNZ"},
+	"tbz":  {typ: opBitBranch, mn: "TBZ"},
+	"tbnz": {typ: opBitBranch, mn: "TBNZ"},
 
 	"stp":  {typ: opPair, mn: "STP", pairMem: true},
 	"ldp":  {typ: opPair, mn: "LDP", clearPair: true, pairMem: true},
 	"fmov": {typ: opFloatMove, mn: "FMOVD", clearDst: true},
 	"adrp": {typ: opADRP, mn: "MOVD", rememberPage: true},
+	"adr":  {typ: opADR, mn: "ADR", clearDst: true},
 
 	"add":    {typ: opRightLeft, mn: "ADD", wmn: "ADDW", clearDst: true},
+	"adds":   {typ: opRightLeft, mn: "ADDS", wmn: "ADDSW", clearDst: true},
+	"adc":    {typ: opRightLeft, mn: "ADC", wmn: "ADCW", clearDst: true},
+	"adcs":   {typ: opRightLeft, mn: "ADCS", wmn: "ADCSW", clearDst: true},
 	"and":    {typ: opRightLeft, mn: "AND", wmn: "ANDW", clearDst: true},
 	"asr":    {typ: opRightLeft, mn: "ASR", wmn: "ASRW", clearDst: true},
 	"bic":    {typ: opRightLeft, mn: "BIC", wmn: "BICW", clearDst: true},
@@ -152,34 +164,50 @@ var opSpecs = map[string]spec{
 	"orr":    {typ: opRightLeft, mn: "ORR", wmn: "ORRW", clearDst: true},
 	"sub":    {typ: opRightLeft, mn: "SUB", wmn: "SUBW", clearDst: true},
 	"subs":   {typ: opRightLeft, mn: "SUBS", wmn: "SUBSW", clearDst: true},
+	"sbc":    {typ: opRightLeft, mn: "SBC", wmn: "SBCW", clearDst: true},
+	"sbcs":   {typ: opRightLeft, mn: "SBCS", wmn: "SBCSW", clearDst: true},
 	"mul":    {typ: opRightLeft, mn: "MUL", clearDst: true},
+	"sdiv":   {typ: opRightLeft, mn: "SDIV", wmn: "SDIVW", clearDst: true},
+	"udiv":   {typ: opRightLeft, mn: "UDIV", wmn: "UDIVW", clearDst: true},
 	"mvn":    {typ: opSrcDst, mn: "MVN", clearDst: true},
+	"neg":    {typ: opSrcDst, mn: "NEG", wmn: "NEGW", clearDst: true},
+	"negs":   {typ: opSrcDst, mn: "NEGS", wmn: "NEGSW", clearDst: true},
 	"rev":    {typ: opSrcDst, mn: "REV", clearDst: true},
 	"sxtw":   {typ: opSrcDst, mn: "SXTW", clearDst: true},
 	"ror":    {typ: opRotate, mn: "ROR", clearDst: true},
 	"umull":  {typ: opRightLeft, mn: "UMULL", clearDst: true},
 	"umulh":  {typ: opRightLeft, mn: "UMULH", clearDst: true},
 	"madd":   {typ: opMulAdd, mn: "MADD", clearDst: true},
+	"msub":   {typ: opMulAdd, mn: "MSUB", clearDst: true},
 	"umaddl": {typ: opMulAdd, mn: "UMADDL", clearDst: true},
 	"csel":   {typ: opCondSelect, mn: "CSEL", wmn: "CSELW", clearDst: true},
+	"cset":   {typ: opCondSet, mn: "CSET", clearDst: true},
 	"bfxil":  {typ: opBitfield, mn: "BFXIL", wmn: "BFXILW", clearDst: true},
+	"ubfx":   {typ: opBitfield, mn: "UBFX", wmn: "UBFXW", clearDst: true},
+	"sbfx":   {typ: opBitfield, mn: "SBFX", wmn: "SBFXW", clearDst: true},
 	"mov":    {typ: opMove, mn: "MOVD", wmn: "MOVW", clearDst: true},
 	"movk":   {typ: opMoveKeep, mn: "MOVK", clearDst: true},
 	"cmp":    {typ: opCompare, mn: "CMP"},
+	"cmn":    {typ: opCompare, mn: "CMN"},
+	"tst":    {typ: opCompare, mn: "TST"},
 }
 
 var opHandlers = map[opType]opHandler{
 	opLiteral:    literal,
 	opBranch:     branch,
 	opCondBranch: condBranch,
+	opRegBranch:  regBranch,
+	opBitBranch:  bitBranch,
 	opPair:       pair,
 	opFloatMove:  floatMove,
 	opADRP:       adrp,
+	opADR:        adr,
 	opRightLeft:  rightLeftOrShifted,
 	opSrcDst:     srcDst,
 	opRotate:     rotate,
 	opMulAdd:     mulAdd,
 	opCondSelect: condSelect,
+	opCondSet:    condSet,
 	opBitfield:   bitfield,
 	opMove:       move,
 	opMoveKeep:   moveKeep,
@@ -280,6 +308,28 @@ func condBranch(form *spec, args []string) (string, error) {
 	return form.mn + " " + args[0], nil
 }
 
+func regBranch(form *spec, args []string) (string, error) {
+	if err := needArgs(args, 2); err != nil {
+		return "", err
+	}
+	reg, err := operand(args[0])
+	if err != nil {
+		return "", err
+	}
+	return form.mn + " " + reg + ", " + branchTarget(args[1]), nil
+}
+
+func bitBranch(form *spec, args []string) (string, error) {
+	if err := needArgs(args, 3); err != nil {
+		return "", err
+	}
+	reg, err := operand(args[0])
+	if err != nil {
+		return "", err
+	}
+	return form.mn + " " + mustOperand(args[1]) + ", " + reg + ", " + branchTarget(args[2]), nil
+}
+
 func adrp(form *spec, args []string) (string, error) {
 	if err := needArgs(args, 2); err != nil {
 		return "", err
@@ -292,6 +342,17 @@ func adrp(form *spec, args []string) (string, error) {
 	return form.mn + " $" + sym + "(SB), " + dst, nil
 }
 
+func adr(form *spec, args []string) (string, error) {
+	if err := needArgs(args, 2); err != nil {
+		return "", err
+	}
+	dst, err := operand(args[0])
+	if err != nil {
+		return "", err
+	}
+	return form.mn + " " + args[1] + ", " + dst, nil
+}
+
 func srcDst(form *spec, args []string) (string, error) {
 	if err := needArgs(args, 2); err != nil {
 		return "", err
@@ -300,7 +361,7 @@ func srcDst(form *spec, args []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return form.mn + " " + ops[1] + ", " + ops[0], nil
+	return mnFor(form, args[0]) + " " + ops[1] + ", " + ops[0], nil
 }
 
 func rotate(form *spec, args []string) (string, error) {
@@ -373,6 +434,17 @@ func condSelect(form *spec, args []string) (string, error) {
 	return mnFor(form, args[0]) + " " + strings.ToUpper(args[3]) + ", " + ops[1] + ", " + ops[2] + ", " + ops[0], nil
 }
 
+func condSet(form *spec, args []string) (string, error) {
+	if err := needArgs(args, 2); err != nil {
+		return "", err
+	}
+	dst, err := operand(args[0])
+	if err != nil {
+		return "", err
+	}
+	return form.mn + " " + strings.ToUpper(args[1]) + ", " + dst, nil
+}
+
 func bitfield(form *spec, args []string) (string, error) {
 	if err := needArgs(args, 4); err != nil {
 		return "", err
@@ -411,6 +483,16 @@ func moveKeep(form *spec, args []string) (string, error) {
 }
 
 func compare(form *spec, args []string) (string, error) {
+	if len(args) != 2 && len(args) != 3 {
+		return "", argCountErr(args, "2 or 3")
+	}
+	if len(args) == 3 {
+		left, err := shiftedOperand(args[1], args[2])
+		if err != nil {
+			return "", err
+		}
+		return form.mn + " " + left + ", " + mustOperand(args[0]), nil
+	}
 	if err := needArgs(args, 2); err != nil {
 		return "", err
 	}

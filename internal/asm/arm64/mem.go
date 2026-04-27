@@ -103,6 +103,8 @@ func loadMnemonic(op, dst string) string {
 		return "MOVB"
 	case strings.Contains(op, "rsh"):
 		return "MOVH"
+	case strings.Contains(op, "rsw"):
+		return "MOVW"
 	case strings.HasSuffix(op, "b"):
 		return "MOVBU"
 	case strings.HasSuffix(op, "h"):
