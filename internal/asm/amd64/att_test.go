@@ -11,6 +11,7 @@ leaq foo(%rip), %rax
 leaq $foo, %rax
 movq (rax), %rcx
 shlq %rax
+shrdq $13, %rbx, %rax
 vpshufd $78, %xmm0, %xmm1
 pxor %xmm1, %xmm0
 `)
@@ -19,6 +20,7 @@ pxor %xmm1, %xmm0
 		"LEAQ foo(SB), AX",
 		"MOVQ (AX), CX",
 		"SHLQ $1, AX",
+		"SHRQ $13, BX, AX",
 		"VPSHUFD $78, X0, X1",
 		"PXOR X1, X0",
 	)
@@ -98,8 +100,9 @@ setg al
 setbe byte ptr [rsp+8]
 imul eax, esi, 7
 setl r8b
+shld rax, rbx, 13
 `)
-	mustContain(t, intel, "SETGT AL", "SETLS 8(SP)", "IMUL3L $7, SI, AX", "SETLT R8B")
+	mustContain(t, intel, "SETGT AL", "SETLS 8(SP)", "IMUL3L $7, SI, AX", "SETLT R8B", "SHLQ $13, BX, AX")
 }
 
 func TestUnsignedWordLoadsStayZeroExtended(t *testing.T) {

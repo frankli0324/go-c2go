@@ -69,6 +69,7 @@ var intelHandlers = map[opType]opHandler{
 	opSIMDExact:        intelSIMDExactHandler,
 	opSIMDSuffix:       intelSIMDSuffixHandler,
 	opSized:            intelSizedHandler,
+	opDoubleShift:      intelDoubleShiftHandler,
 	opCMOV:             intelCMOVHandler,
 	opSETCC:            setCCHandler,
 }
@@ -113,6 +114,25 @@ func intelCMOVHandler(ctx opContext) (string, []string, error) {
 		return mnemonic, ops, err
 	}
 	return "", nil, fmt.Errorf("unsupported cmov mnemonic %q", ctx.op)
+}
+
+func intelDoubleShiftHandler(ctx opContext) (string, []string, error) {
+	if len(ctx.ops) != 3 {
+		return "", nil, fmt.Errorf("%s takes three operands", ctx.op)
+	}
+	mnemonic := ctx.spec.mn
+	if mnemonic == "" {
+		suffix := intelSuffix(ctx)
+		if suffix == "" || suffix == "B" {
+			return "", nil, fmt.Errorf("cannot infer width for %q", ctx.op)
+		}
+		mnemonic = doubleShiftMnemonic(ctx.op, suffix)
+	}
+	ops, err := convertOperands(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	return mnemonic, []string{ops[2], ops[1], ops[0]}, nil
 }
 
 func intelSIMDExactHandler(ctx opContext) (string, []string, error) {

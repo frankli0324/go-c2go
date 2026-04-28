@@ -65,6 +65,7 @@ var attHandlers = map[opType]opHandler{
 	opSIMDExact:        attSIMDExactHandler,
 	opSIMDSuffix:       attSIMDSuffixHandler,
 	opSized:            attSizedHandler,
+	opDoubleShift:      attDoubleShiftHandler,
 	opCMOV:             attCMOVHandler,
 	opSETCC:            setCCHandler,
 }
@@ -93,6 +94,25 @@ func attCMOVHandler(ctx opContext) (string, []string, error) {
 		return mnemonic, reorderATTOperands(ctx.op, ops), err
 	}
 	return "", nil, fmt.Errorf("unsupported cmov mnemonic %q", ctx.op)
+}
+
+func attDoubleShiftHandler(ctx opContext) (string, []string, error) {
+	if len(ctx.ops) != 3 {
+		return "", nil, fmt.Errorf("%s takes three operands", ctx.op)
+	}
+	mnemonic := ctx.spec.mn
+	if mnemonic == "" {
+		suffix := ""
+		if reg := strings.TrimPrefix(ctx.args[2], "%"); reg != ctx.args[2] {
+			suffix, _ = intelRegWidth(reg)
+		}
+		if suffix == "" || suffix == "B" {
+			return "", nil, fmt.Errorf("cannot infer width for %q", ctx.op)
+		}
+		mnemonic = doubleShiftMnemonic(ctx.op, suffix)
+	}
+	ops, err := convertOperands(ctx)
+	return mnemonic, ops, err
 }
 
 func attSIMDExactHandler(ctx opContext) (string, []string, error) {

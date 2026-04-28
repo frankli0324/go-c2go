@@ -22,6 +22,7 @@ const (
 	opSIMDExact
 	opSIMDSuffix
 	opSized
+	opDoubleShift
 	opCMOV
 	opSETCC
 )
@@ -91,6 +92,14 @@ var opSpecs = map[string]opSpec{
 	"movdqa":     {typ: opSIMDExact, mn: "MOVO"},
 	"movdqu":     {typ: opSIMDExact, mn: "MOVOU"},
 	"movntdq":    {typ: opSIMDExact, mn: "MOVNTO"},
+	"shld":       {typ: opDoubleShift},
+	"shldl":      {typ: opDoubleShift, mn: "SHLL"},
+	"shldq":      {typ: opDoubleShift, mn: "SHLQ"},
+	"shldw":      {typ: opDoubleShift, mn: "SHLW"},
+	"shrd":       {typ: opDoubleShift},
+	"shrdl":      {typ: opDoubleShift, mn: "SHRL"},
+	"shrdq":      {typ: opDoubleShift, mn: "SHRQ"},
+	"shrdw":      {typ: opDoubleShift, mn: "SHRW"},
 
 	"pshufb":       {typ: opSIMDExact, mn: "PSHUFB"},
 	"pxor":         {typ: opSIMDExact, mn: "PXOR"},
@@ -223,4 +232,11 @@ func convertOperands(ctx opContext) ([]string, error) {
 
 func convertSIMDOperands(ctx opContext) ([]string, error) {
 	return convertOperands(ctx)
+}
+
+func doubleShiftMnemonic(op, suffix string) string {
+	if strings.HasPrefix(op, "shld") {
+		return "SHL" + suffix
+	}
+	return "SHR" + suffix
 }
