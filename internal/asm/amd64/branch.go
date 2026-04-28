@@ -1,30 +1,31 @@
 package amd64
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/frankli0324/go-c2go/internal/asm/asmutil"
 )
 
-func convertBranchTarget(op, target string) string {
+func convertBranchTarget(target string, addSymbol bool) (string, error) {
 	target = strings.TrimSpace(target)
 	if target == "" {
-		return target
+		return target, nil
 	}
-	if strings.HasPrefix(target, "*") {
+	indirect := strings.HasPrefix(target, "*")
+	if indirect {
 		target = strings.TrimSpace(strings.TrimPrefix(target, "*"))
-		if converted, ok := convertIndirectBranchTarget(target); ok {
-			return converted
-		}
-		return target
+	}
+	if containsELFReloc(target) {
+		return "", fmt.Errorf("unsupported ELF relocation in branch target %q", target)
 	}
 	if converted, ok := convertIndirectBranchTarget(target); ok {
-		return converted
+		return converted, nil
 	}
-	if asmutil.IsLocalLabel(target) || isConditionalBranch(op) {
-		return target
+	if indirect || asmutil.IsLocalLabel(target) || !addSymbol {
+		return target, nil
 	}
-	return asmutil.AddSB(target)
+	return asmutil.AddSB(target), nil
 }
 
 func convertIndirectBranchTarget(target string) (string, bool) {
@@ -33,24 +34,15 @@ func convertIndirectBranchTarget(target string) (string, bool) {
 	}
 	if strings.HasPrefix(target, "[") && strings.HasSuffix(target, "]") {
 		if mem, err := convertIntelMemory(target); err == nil {
-			return mem, true
+			return strings.TrimPrefix(mem, "$"), true
 		}
 	}
 	if strings.Contains(target, "(") && strings.HasSuffix(target, ")") {
 		if mem, err := convertATTMemory(target); err == nil {
-			return mem, true
+			return strings.TrimPrefix(mem, "$"), true
 		}
 	}
 	return "", false
-}
-
-func isConditionalBranch(op string) bool {
-	lower := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(op)), "q")
-	if lower == "call" || lower == "jmp" || lower == "ret" {
-		return false
-	}
-	_, ok := opSpecs[lower]
-	return ok
 }
 
 func cmovMnemonic(op string) (string, bool) {

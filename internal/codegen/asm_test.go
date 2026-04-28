@@ -128,6 +128,31 @@ func TestRenderAsmFileTerminatesText(t *testing.T) {
 	}
 }
 
+func TestRenderAsmFileKeepsColdLocalBlocksInFunction(t *testing.T) {
+	input := strings.TrimSpace(`
+foo:
+CALL bar(SB)
+RET
+// .p2align 4,,10
+// .p2align 3
+Lcold:
+JMP foo(SB)
+`) + "\n"
+
+	got, err := RenderAsmFile(input)
+	if err != nil {
+		t.Fatalf("RenderAsmFile() error = %v", err)
+	}
+	if strings.Contains(got, "TEXT Lcold(SB)") {
+		t.Fatalf("local cold block should stay in previous TEXT\n%s", got)
+	}
+	for _, want := range []string{"TEXT foo(SB)", "\t// .p2align 4,,10", "Lcold:", "\tJMP foo(SB)"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q\n%s", want, got)
+		}
+	}
+}
+
 func TestRenderAsmFileEmitsQuadData(t *testing.T) {
 	input := strings.TrimSpace(`
 LCPI0_0:

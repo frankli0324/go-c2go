@@ -143,6 +143,10 @@ func plan9Immediate(v string) string {
 	return "$" + asmutil.AddSB(v)
 }
 
+func containsELFReloc(s string) bool {
+	return strings.Contains(s, "@")
+}
+
 func isIntelImmediate(v string) bool {
 	v = strings.TrimSpace(v)
 	if asmutil.IsNumeric(v) {

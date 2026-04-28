@@ -89,6 +89,73 @@ mov eax, dword ptr [rsi]
 	mustNotContain(t, intel, "MOVSXL", "MOVLQSX")
 }
 
+func TestCompareOperandOrder(t *testing.T) {
+	att := translateATT(t, `
+cmpq %r13, %rax
+ja Ldone
+`)
+	mustContain(t, att, "CMPQ AX, R13", "JA Ldone")
+	mustNotContain(t, att, "CMPQ R13, AX")
+
+	intel := translateIntel(t, `
+cmp rax, r13
+ja Ldone
+`)
+	mustContain(t, intel, "CMPQ AX, R13", "JA Ldone")
+	mustNotContain(t, intel, "CMPQ R13, AX")
+}
+
+func TestATTCLTQ(t *testing.T) {
+	out := translateATT(t, `cltq`)
+	mustContain(t, out, "MOVLQSX AX, AX")
+	mustNotContain(t, out, "CLTQ")
+}
+
+func TestRejectsELFRelocations(t *testing.T) {
+	cases := []struct {
+		name string
+		tr   interface {
+			TranslateInstruction(string, string) (string, bool)
+		}
+		line string
+	}{
+		{"att direct plt call", ATT{}, "callq __builtin_rotateleft64@PLT"},
+		{"att gotpcrel operand", ATT{}, "movq foo@GOTPCREL(%rip), %rax"},
+		{"att gotoff operand", ATT{}, "leaq bar@GOTOFF+8(%rip), %rcx"},
+		{"att indirect gotpcrel call", ATT{}, "callq *foo@GOTPCREL(%rip)"},
+		{"att indirect gotpcrel jump", ATT{}, "jmpq *bar@GOTPCREL(%rip)"},
+		{"intel direct plt call", Intel{}, "call foo@PLT"},
+		{"intel gotpcrel operand", Intel{}, "mov rax, [rip+foo@GOTPCREL]"},
+	}
+	for _, tc := range cases {
+		out, bad := tc.tr.TranslateInstruction("", tc.line)
+		if !bad {
+			t.Fatalf("%s: TranslateInstruction(%q) = %q, false, want unsupported", tc.name, tc.line, out)
+		}
+		mustContain(t, out, "// UNSUPPORTED: "+tc.line)
+	}
+}
+
+func TestIntelCDQE(t *testing.T) {
+	out := translateIntel(t, `cdqe`)
+	mustContain(t, out, "MOVLQSX AX, AX")
+
+	var tr Intel
+	unsupported, bad := tr.TranslateInstruction("", "cltq")
+	if !bad {
+		t.Fatalf("Intel cltq = %q, false, want unsupported", unsupported)
+	}
+}
+
+func TestATTSuffixedConditionalBranches(t *testing.T) {
+	out := translateATT(t, `
+jeq .Ldone
+jneq Lnext
+`)
+	mustContain(t, out, "JE .Ldone", "JNE Lnext")
+	mustNotContain(t, out, "JEQ", "JNEQ", ".Ldone(SB)", "Lnext(SB)")
+}
+
 func TestIntelAVXWhitelistReorder(t *testing.T) {
 	out, unsupported := translateIntelAllowUnsupported(t, `
 vaddps ymm2, ymm0, ymm1

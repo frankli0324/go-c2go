@@ -3,15 +3,6 @@ package amd64
 import (
 	"fmt"
 	"strings"
-
-	"github.com/frankli0324/go-c2go/internal/asm/asmutil"
-)
-
-type syntaxKind int
-
-const (
-	syntaxATT syntaxKind = iota
-	syntaxIntel
 )
 
 type opSpec struct {
@@ -23,11 +14,14 @@ type opType int
 
 const (
 	opFixed opType = iota
-	opBranch
+	opCall
+	opJump
+	opCondBranch
+	opCondBranchSuffix
+	opReturn
 	opSIMDExact
 	opSIMDSuffix
-	opATTSized
-	opIntelSized
+	opSized
 	opCMOV
 	opSETCC
 )
@@ -35,30 +29,50 @@ const (
 type opHandler func(opContext) (string, []string, error)
 
 var opSpecs = map[string]opSpec{
-	"call":  {typ: opBranch, mn: "CALL"},
-	"callq": {typ: opBranch, mn: "CALL"},
-	"ret":   {typ: opBranch, mn: "RET"},
-	"retq":  {typ: opBranch, mn: "RET"},
+	"call":  {typ: opCall, mn: "CALL"},
+	"callq": {typ: opCall, mn: "CALL"},
+	"ret":   {typ: opReturn, mn: "RET"},
+	"retq":  {typ: opReturn, mn: "RET"},
 
-	"jmp": {typ: opBranch, mn: "JMP"},
-	"je":  {typ: opBranch, mn: "JE"},
-	"jne": {typ: opBranch, mn: "JNE"},
-	"jg":  {typ: opBranch, mn: "JG"},
-	"jge": {typ: opBranch, mn: "JGE"},
-	"jl":  {typ: opBranch, mn: "JL"},
-	"jle": {typ: opBranch, mn: "JLE"},
-	"ja":  {typ: opBranch, mn: "JA"},
-	"jae": {typ: opBranch, mn: "JAE"},
-	"jb":  {typ: opBranch, mn: "JB"},
-	"jbe": {typ: opBranch, mn: "JBE"},
-	"jo":  {typ: opBranch, mn: "JO"},
-	"jno": {typ: opBranch, mn: "JNO"},
-	"js":  {typ: opBranch, mn: "JS"},
-	"jns": {typ: opBranch, mn: "JNS"},
-	"jp":  {typ: opBranch, mn: "JP"},
-	"jnp": {typ: opBranch, mn: "JNP"},
-	"jz":  {typ: opBranch, mn: "JZ"},
-	"jnz": {typ: opBranch, mn: "JNZ"},
+	"jmp":  {typ: opJump, mn: "JMP"},
+	"jmpq": {typ: opJump, mn: "JMP"},
+	"je":   {typ: opCondBranch, mn: "JE"},
+	"jne":  {typ: opCondBranch, mn: "JNE"},
+	"jg":   {typ: opCondBranch, mn: "JG"},
+	"jge":  {typ: opCondBranch, mn: "JGE"},
+	"jl":   {typ: opCondBranch, mn: "JL"},
+	"jle":  {typ: opCondBranch, mn: "JLE"},
+	"ja":   {typ: opCondBranch, mn: "JA"},
+	"jae":  {typ: opCondBranch, mn: "JAE"},
+	"jb":   {typ: opCondBranch, mn: "JB"},
+	"jbe":  {typ: opCondBranch, mn: "JBE"},
+	"jo":   {typ: opCondBranch, mn: "JO"},
+	"jno":  {typ: opCondBranch, mn: "JNO"},
+	"js":   {typ: opCondBranch, mn: "JS"},
+	"jns":  {typ: opCondBranch, mn: "JNS"},
+	"jp":   {typ: opCondBranch, mn: "JP"},
+	"jnp":  {typ: opCondBranch, mn: "JNP"},
+	"jz":   {typ: opCondBranch, mn: "JZ"},
+	"jnz":  {typ: opCondBranch, mn: "JNZ"},
+
+	"jeq":  {typ: opCondBranchSuffix, mn: "JE"},
+	"jneq": {typ: opCondBranchSuffix, mn: "JNE"},
+	"jgq":  {typ: opCondBranchSuffix, mn: "JG"},
+	"jgeq": {typ: opCondBranchSuffix, mn: "JGE"},
+	"jlq":  {typ: opCondBranchSuffix, mn: "JL"},
+	"jleq": {typ: opCondBranchSuffix, mn: "JLE"},
+	"jaq":  {typ: opCondBranchSuffix, mn: "JA"},
+	"jaeq": {typ: opCondBranchSuffix, mn: "JAE"},
+	"jbq":  {typ: opCondBranchSuffix, mn: "JB"},
+	"jbeq": {typ: opCondBranchSuffix, mn: "JBE"},
+	"joq":  {typ: opCondBranchSuffix, mn: "JO"},
+	"jnoq": {typ: opCondBranchSuffix, mn: "JNO"},
+	"jsq":  {typ: opCondBranchSuffix, mn: "JS"},
+	"jnsq": {typ: opCondBranchSuffix, mn: "JNS"},
+	"jpq":  {typ: opCondBranchSuffix, mn: "JP"},
+	"jnpq": {typ: opCondBranchSuffix, mn: "JNP"},
+	"jzq":  {typ: opCondBranchSuffix, mn: "JZ"},
+	"jnzq": {typ: opCondBranchSuffix, mn: "JNZ"},
 
 	"movabsq":    {typ: opFixed, mn: "MOVQ"},
 	"movsbl":     {typ: opFixed, mn: "MOVBLSX"},
@@ -142,43 +156,15 @@ var opSpecs = map[string]opSpec{
 }
 
 type opContext struct {
-	syntax syntaxKind
-	op     string
-	args   []string
-	ptrs   []string
-	spec   opSpec
-	ops    []string
+	op      string
+	args    []string
+	ptrs    []string
+	spec    opSpec
+	ops     []string
+	convert func(string, string) (string, error)
 }
 
-func translateAMD64(op string, args []string, syntax syntaxKind, handlers map[opType]opHandler) (string, error) {
-	op = strings.ToLower(op)
-	ptrs := make([]string, len(args))
-	clean := make([]string, len(args))
-	for i, arg := range args {
-		operand, ptr := cleanOperand(syntax, arg)
-		ptrs[i] = ptr
-		clean[i] = operand
-	}
-	spec := specFor(syntax, op)
-	mnemonic, converted, err := handlers[spec.typ](opContext{
-		syntax: syntax,
-		op:     op,
-		args:   args,
-		ptrs:   ptrs,
-		spec:   spec,
-		ops:    clean,
-	})
-	if err != nil {
-		return "", err
-	}
-	converted, err = reorderOperands(syntax, op, converted)
-	if err != nil {
-		return "", err
-	}
-	return asmutil.JoinInstruction(mnemonic, converted), nil
-}
-
-func specFor(syntax syntaxKind, op string) opSpec {
+func specFor(op string) opSpec {
 	if spec, ok := opSpecs[op]; ok {
 		return spec
 	}
@@ -191,33 +177,27 @@ func specFor(syntax syntaxKind, op string) opSpec {
 	if strings.HasPrefix(op, "set") {
 		return opSpec{typ: opSETCC}
 	}
-	if syntax == syntaxIntel {
-		return opSpec{typ: opIntelSized}
+	return opSpec{typ: opSized}
+}
+
+func returnHandler(ctx opContext) (string, []string, error) {
+	if len(ctx.ops) != 0 {
+		return "", nil, fmt.Errorf("return takes no operands")
 	}
-	return opSpec{typ: opATTSized}
+	return ctx.spec.mn, nil, nil
 }
 
-func fixedHandler(ctx opContext) (string, []string, error) {
-	ops, err := convertOperands(ctx)
-	return ctx.spec.mn, ops, err
-}
-
-func branchHandler(ctx opContext) (string, []string, error) {
+func targetBranchHandler(ctx opContext) (string, []string, error) {
+	addSymbol := ctx.spec.typ == opCall || ctx.spec.typ == opJump
 	ops := make([]string, len(ctx.ops))
 	for i, arg := range ctx.ops {
-		ops[i] = convertBranchTarget(ctx.op, arg)
+		target, err := convertBranchTarget(arg, addSymbol)
+		if err != nil {
+			return "", nil, err
+		}
+		ops[i] = target
 	}
 	return ctx.spec.mn, ops, nil
-}
-
-func simdExactHandler(ctx opContext) (string, []string, error) {
-	ops, err := convertSIMDOperands(ctx)
-	return ctx.spec.mn, ops, err
-}
-
-func simdSuffixHandler(ctx opContext) (string, []string, error) {
-	ops, err := convertSIMDOperands(ctx)
-	return strings.ToUpper(ctx.op), ops, err
 }
 
 func setCCHandler(ctx opContext) (string, []string, error) {
@@ -232,7 +212,7 @@ func setCCHandler(ctx opContext) (string, []string, error) {
 func convertOperands(ctx opContext) ([]string, error) {
 	out := make([]string, len(ctx.ops))
 	for i, arg := range ctx.ops {
-		converted, err := convertOperand(ctx.syntax, ctx.op, arg)
+		converted, err := ctx.convert(ctx.op, arg)
 		if err != nil {
 			return nil, err
 		}
@@ -242,35 +222,5 @@ func convertOperands(ctx opContext) ([]string, error) {
 }
 
 func convertSIMDOperands(ctx opContext) ([]string, error) {
-	out, err := convertOperands(ctx)
-	if err != nil || ctx.syntax != syntaxATT {
-		return out, err
-	}
-	for i, arg := range ctx.ops {
-		if strings.Contains(strings.ToLower(arg), "(%rip)") {
-			out[i] = strings.TrimPrefix(out[i], "$")
-		}
-	}
-	return out, nil
-}
-
-func cleanOperand(syntax syntaxKind, arg string) (string, string) {
-	if syntax == syntaxIntel {
-		return stripIntelPtr(arg)
-	}
-	return arg, ""
-}
-
-func convertOperand(syntax syntaxKind, op, arg string) (string, error) {
-	if syntax == syntaxIntel {
-		return convertIntelOperand(op, arg)
-	}
-	return convertATTOperand(op, arg)
-}
-
-func reorderOperands(syntax syntaxKind, op string, operands []string) ([]string, error) {
-	if syntax == syntaxIntel {
-		return reorderIntelOperands(op, operands)
-	}
-	return reorderATTOperands(op, operands), nil
+	return convertOperands(ctx)
 }

@@ -77,6 +77,8 @@ func isGNUCompiler(compiler string) bool {
 func defaultCompileFlags() []string {
 	return []string{
 		"-ffreestanding",
+		"-fno-pic",
+		"-fno-pie",
 		"-fno-builtin",
 		"-fno-stack-protector",
 		"-fomit-frame-pointer",

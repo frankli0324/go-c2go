@@ -21,23 +21,44 @@ func (ATT) TranslateInstruction(indent, line string) (string, bool) {
 	if len(fields) == 0 {
 		return indent, false
 	}
-	op := fields[0]
-	argsText := strings.TrimSpace(strings.TrimPrefix(line, op))
-	out, err := translateAMD64(op, asmutil.SplitOperands(argsText), syntaxATT, attHandlers)
+	rawOp := fields[0]
+	op := strings.ToLower(rawOp)
+	argsText := strings.TrimSpace(strings.TrimPrefix(line, rawOp))
+	args := asmutil.SplitOperands(argsText)
+	if op == "cltq" {
+		return indent + "MOVLQSX AX, AX", false
+	}
+	spec := specFor(op)
+	mnemonic, converted, err := attHandlers[spec.typ](opContext{
+		op:      op,
+		args:    args,
+		spec:    spec,
+		ops:     args,
+		convert: convertATTOperand,
+	})
 	if err != nil {
 		return indent + "// UNSUPPORTED: " + line, true
 	}
-	return indent + out, false
+	return indent + asmutil.JoinInstruction(mnemonic, converted), false
 }
 
 var attHandlers = map[opType]opHandler{
-	opFixed:      fixedHandler,
-	opBranch:     branchHandler,
-	opSIMDExact:  simdExactHandler,
-	opSIMDSuffix: simdSuffixHandler,
-	opATTSized:   attSizedHandler,
-	opCMOV:       attCMOVHandler,
-	opSETCC:      setCCHandler,
+	opFixed:            attFixedHandler,
+	opCall:             targetBranchHandler,
+	opJump:             targetBranchHandler,
+	opCondBranch:       targetBranchHandler,
+	opCondBranchSuffix: targetBranchHandler,
+	opReturn:           returnHandler,
+	opSIMDExact:        attSIMDExactHandler,
+	opSIMDSuffix:       attSIMDSuffixHandler,
+	opSized:            attSizedHandler,
+	opCMOV:             attCMOVHandler,
+	opSETCC:            setCCHandler,
+}
+
+func attFixedHandler(ctx opContext) (string, []string, error) {
+	ops, err := convertOperands(ctx)
+	return ctx.spec.mn, reorderATTOperands(ctx.op, ops), err
 }
 
 func attSizedHandler(ctx opContext) (string, []string, error) {
@@ -48,7 +69,7 @@ func attSizedHandler(ctx opContext) (string, []string, error) {
 		if ctx.op[:len(ctx.op)-1] == "imul" && len(ctx.ops) == 3 {
 			mnemonic = "IMUL3" + strings.ToUpper(suffix)
 		}
-		return mnemonic, ops, err
+		return mnemonic, reorderATTOperands(ctx.op, ops), err
 	}
 	return "", nil, fmt.Errorf("unsupported mnemonic %q", ctx.op)
 }
@@ -56,9 +77,32 @@ func attSizedHandler(ctx opContext) (string, []string, error) {
 func attCMOVHandler(ctx opContext) (string, []string, error) {
 	if mnemonic, ok := cmovMnemonic(ctx.op); ok {
 		ops, err := convertOperands(ctx)
-		return mnemonic, ops, err
+		return mnemonic, reorderATTOperands(ctx.op, ops), err
 	}
 	return "", nil, fmt.Errorf("unsupported cmov mnemonic %q", ctx.op)
+}
+
+func attSIMDExactHandler(ctx opContext) (string, []string, error) {
+	ops, err := convertATTSIMDOperands(ctx)
+	return ctx.spec.mn, reorderATTOperands(ctx.op, ops), err
+}
+
+func attSIMDSuffixHandler(ctx opContext) (string, []string, error) {
+	ops, err := convertATTSIMDOperands(ctx)
+	return strings.ToUpper(ctx.op), reorderATTOperands(ctx.op, ops), err
+}
+
+func convertATTSIMDOperands(ctx opContext) ([]string, error) {
+	out, err := convertSIMDOperands(ctx)
+	if err != nil {
+		return out, err
+	}
+	for i, arg := range ctx.ops {
+		if strings.Contains(strings.ToLower(arg), "(%rip)") {
+			out[i] = strings.TrimPrefix(out[i], "$")
+		}
+	}
+	return out, nil
 }
 
 func convertATTOperand(op, arg string) (string, error) {
@@ -66,13 +110,16 @@ func convertATTOperand(op, arg string) (string, error) {
 	if arg == "" {
 		return "", fmt.Errorf("empty operand")
 	}
+	if containsELFReloc(arg) {
+		return "", fmt.Errorf("unsupported ELF relocation in operand %q", arg)
+	}
 	if strings.HasPrefix(arg, "%") {
 		return plan9Register(strings.TrimPrefix(arg, "%"))
 	}
 	if strings.HasPrefix(arg, "$") {
 		value := strings.TrimPrefix(arg, "$")
 		if strings.EqualFold(op, "leaq") && !asmutil.IsNumeric(value) {
-			return asmutil.AddSB(value), nil
+			return strings.TrimPrefix(plan9Immediate(value), "$"), nil
 		}
 		return plan9Immediate(value), nil
 	}
@@ -133,10 +180,18 @@ func reorderATTOperands(op string, operands []string) []string {
 	if len(operands) == 1 && isUnaryOneShift(op) {
 		return []string{"$1", operands[0]}
 	}
-	if len(operands) == 2 && strings.HasPrefix(strings.ToLower(op), "cmp") && strings.HasPrefix(operands[0], "$") {
+	if len(operands) == 2 && isCompareOp(op) {
 		return []string{operands[1], operands[0]}
 	}
 	return operands
+}
+
+func isCompareOp(op string) bool {
+	op = strings.ToLower(op)
+	if len(op) > 1 && strings.ContainsRune("bwlq", rune(op[len(op)-1])) {
+		op = op[:len(op)-1]
+	}
+	return op == "cmp"
 }
 
 func isUnaryOneShift(op string) bool {

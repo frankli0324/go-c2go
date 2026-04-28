@@ -108,9 +108,6 @@ func (b *asmFileBuilder) addComment(line string) {
 	switch {
 	case b.current == nil:
 		b.addPreambleComment(line)
-	case b.ended:
-		b.finishFunc()
-		b.pendingComments = append(b.pendingComments, line)
 	default:
 		b.current.body = append(b.current.body, "\t"+line)
 	}

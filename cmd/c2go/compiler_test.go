@@ -2,6 +2,7 @@ package main
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -32,5 +33,17 @@ func TestCompileArgsAvoidAMD64GoReservedRegistersForGCC(t *testing.T) {
 		if slices.Contains(clangArgs, flag) {
 			t.Fatalf("clang compileArgs contains GCC-only %s: %v", flag, clangArgs)
 		}
+	}
+}
+
+func TestCompileArgsDisablePICAndPIE(t *testing.T) {
+	args := compileArgs("clang", compileConfig{arch: "amd64", goos: "linux", sourcePath: "x.c"}, false)
+	for _, flag := range []string{"-fno-pic", "-fno-pie"} {
+		if !slices.Contains(args, flag) {
+			t.Fatalf("compileArgs missing %s: %v", flag, args)
+		}
+	}
+	if slices.Contains(args, "-fno-plt") {
+		t.Fatalf("compileArgs must not use -fno-plt because it emits GOTPCREL: %s", strings.Join(args, " "))
 	}
 }
