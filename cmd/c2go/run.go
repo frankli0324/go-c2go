@@ -93,7 +93,11 @@ func generate(cfg config) error {
 		return err
 	}
 
-	rewritten, err := asmconv.Translate(cfg.syntax, compileCfg.arch, asm)
+	rewritten, err := asmconv.Translate(asm, asmconv.Context{
+		Syntax:    cfg.syntax,
+		Arch:      compileCfg.arch,
+		GoVersion: currentModuleGoVersion(),
+	})
 	var unsupported asmconv.UnsupportedError
 	if err != nil && !errors.As(err, &unsupported) {
 		return err
@@ -249,17 +253,55 @@ func replaceBuildExpr(src, expr string) string {
 }
 
 func resolveArch(arch string) string {
-	if strings.TrimSpace(arch) != "" {
+	arch = strings.TrimSpace(strings.ToLower(arch))
+	if arch != "" {
 		return arch
 	}
 	return resolveEnv("GOARCH", runtime.GOARCH)
 }
 
 func resolveEnv(name, fallback string) string {
-	if env := strings.TrimSpace(os.Getenv(name)); env != "" {
+	if env := strings.TrimSpace(strings.ToLower(os.Getenv(name))); env != "" {
 		return env
 	}
 	return fallback
+}
+
+func currentModuleGoVersion() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for {
+		body, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+		if err == nil {
+			return parseGoDirective(string(body))
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+func parseGoDirective(mod string) string {
+	for _, line := range strings.Split(mod, "\n") {
+		line = strings.TrimSpace(strings.Split(line, "//")[0])
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "go" {
+			return normalizeGoVersion(fields[1])
+		}
+	}
+	return ""
+}
+
+func normalizeGoVersion(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" || strings.HasPrefix(v, "go") {
+		return v
+	}
+	return "go" + v
 }
 
 func detectPackage(dir string) (string, error) {

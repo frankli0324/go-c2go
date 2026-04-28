@@ -52,7 +52,7 @@ func run(args []string) error {
 	}
 
 	arch := resolveArch(cfg.arch)
-	rewritten, err := asmconv.Translate(cfg.syntax, arch, string(asm))
+	rewritten, err := asmconv.Translate(string(asm), asmconv.Context{Syntax: cfg.syntax, Arch: arch})
 	var unsupported asmconv.UnsupportedError
 	if err != nil && !errors.As(err, &unsupported) {
 		return err
@@ -83,10 +83,11 @@ func outputPath(explicit, src, arch string) string {
 }
 
 func resolveArch(arch string) string {
-	if strings.TrimSpace(arch) != "" {
+	arch = strings.TrimSpace(strings.ToLower(arch))
+	if arch != "" {
 		return arch
 	}
-	if env := strings.TrimSpace(os.Getenv("GOARCH")); env != "" {
+	if env := strings.TrimSpace(strings.ToLower(os.Getenv("GOARCH"))); env != "" {
 		return env
 	}
 	return runtime.GOARCH

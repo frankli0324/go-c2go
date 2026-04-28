@@ -160,6 +160,38 @@ int add(int a, int b) { return a + b; }
 	goTest(t, dir, goos, asmconv.ArchARM64, "-c", "./...")
 }
 
+func TestRunReadsGoModFromCurrentDirectory(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "src")
+	if err := os.Mkdir(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "go.mod", "module sample\n\ngo 1.21\n")
+	src := write(t, srcDir, "sample.c", "int add(int a, int b) { return a + b; }\n")
+	out := filepath.Join(dir, "sample.s")
+	inDir(t, dir, func() {
+		runOK(t, "-src", src, "-cc", "clang", "-arch", asmconv.ArchAMD64, "-syntax", "auto", "-o", out)
+	})
+	text := read(t, out)
+	mustContain(t, text, "// .p2align")
+	mustNotContain(t, text, "PCALIGN")
+}
+
+func TestRunKeepsPCALIGNForNewGoMod(t *testing.T) {
+	_, arch := requireHostCompilerTarget(t)
+	if arch != asmconv.ArchAMD64 {
+		t.Skipf("clang amd64 p2align check requires amd64 output, got %s", arch)
+	}
+	dir := t.TempDir()
+	write(t, dir, "go.mod", "module sample\n\ngo 1.26\n")
+	src := write(t, dir, "sample.c", "int add(int a, int b) { return a + b; }\n")
+	out := filepath.Join(dir, "sample.s")
+	inDir(t, dir, func() {
+		runOK(t, "-src", src, "-cc", "clang", "-arch", asmconv.ArchAMD64, "-syntax", "auto", "-o", out)
+	})
+	mustContain(t, read(t, out), "PCALIGN")
+}
+
 func TestRunPackageModeRequiresCFiles(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "generate.go", "package sample\n")

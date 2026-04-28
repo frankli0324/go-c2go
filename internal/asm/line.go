@@ -9,12 +9,12 @@ var pseudoComment = map[string]struct{}{
 	".globl": {}, ".global": {}, ".type": {}, ".size": {}, ".section": {}, ".align": {}, ".text": {}, ".data": {}, ".bss": {},
 }
 
-func translateLines(src string, v translator) (string, int) {
+func (ctx Context) translateLines(src string, v translator) (string, int) {
 	lines := strings.Split(src, "\n")
 	out := make([]string, 0, len(lines))
 	unsupported := 0
 	for _, raw := range lines {
-		converted, bad := translateLine(raw, v)
+		converted, bad := ctx.translateLine(raw, v)
 		out = append(out, converted...)
 		if bad {
 			unsupported++
@@ -23,7 +23,7 @@ func translateLines(src string, v translator) (string, int) {
 	return strings.Join(out, "\n"), unsupported
 }
 
-func translateLine(raw string, v translator) ([]string, bool) {
+func (ctx Context) translateLine(raw string, v translator) ([]string, bool) {
 	indent := leadingWhitespace(raw)
 	body := splitComment(raw, v.CommentPrefix())
 	trimmed := strings.TrimSpace(body)
@@ -42,7 +42,7 @@ func translateLine(raw string, v translator) ([]string, bool) {
 	}
 
 	if strings.HasPrefix(trimmed, ".") {
-		line, drop, unsupported := handlePseudo(indent, trimmed)
+		line, drop, unsupported := ctx.handlePseudo(indent, trimmed)
 		if drop {
 			return out, unsupported
 		}
@@ -80,7 +80,7 @@ func splitLabel(line string) (label, rest string) {
 	return "", line
 }
 
-func handlePseudo(indent, line string) (string, bool, bool) {
+func (ctx Context) handlePseudo(indent, line string) (string, bool, bool) {
 	fields := strings.Fields(line)
 	if len(fields) == 0 {
 		return "", true, false
@@ -90,6 +90,9 @@ func handlePseudo(indent, line string) (string, bool, bool) {
 		return "", true, false
 	}
 	if op == ".p2align" {
+		if !ctx.supportsPCALIGN() {
+			return indent + "// " + line, false, false
+		}
 		args := strings.TrimSpace(strings.TrimPrefix(line, fields[0]))
 		align, _, _ := strings.Cut(args, ",")
 		align = strings.TrimSpace(align)

@@ -71,12 +71,12 @@ LBB2_3:
 
 func TestTranslateRejectsUnsupportedVariants(t *testing.T) {
 	for _, syntax := range []string{ATT, Intel, Plan9} {
-		_, err := Translate(syntax, "arm64", "ret\n")
+		_, err := Translate("ret\n", Context{Syntax: syntax, Arch: "arm64"})
 		if err == nil || !strings.Contains(err.Error(), `is not supported for arm64`) {
 			t.Fatalf("unexpected arm64 error for %s: %v", syntax, err)
 		}
 	}
-	_, err := Translate(Plan9, "amd64", "TEXT foo(SB),$0\n")
+	_, err := Translate("TEXT foo(SB),$0\n", Context{Syntax: Plan9, Arch: "amd64"})
 	if err == nil || !strings.Contains(err.Error(), "not implemented") {
 		t.Fatalf("unexpected plan9 error: %v", err)
 	}
@@ -126,7 +126,7 @@ cmovbq %r8, %rbx
 }
 
 func TestTranslateMetadataAndComments(t *testing.T) {
-	out, err := Translate(ATT, "amd64", strings.TrimSpace(`
+	out, err := Translate(strings.TrimSpace(`
 .file 1 "x.c"
 .loc 1 1 0
 .cfi_startproc
@@ -145,7 +145,7 @@ func TestTranslateMetadataAndComments(t *testing.T) {
 .xword 5
 .unknown meta
 ret
-`)+"\n")
+`)+"\n", Context{Syntax: ATT, Arch: "amd64"})
 	if count := unsupportedCount(t, err); count != 1 {
 		t.Fatalf("UnsupportedError.Count = %d, want 1\n%s", count, out)
 	}
@@ -153,6 +153,22 @@ ret
 	mustNotContain(t, out, ".cfi_startproc", ".file 1 \"x.c\"", ".loc 1 1 0", ".ident", ".addrsig", ".build_version", ".subsections_via_symbols", "%bb.0")
 	checkTranslate(t, ATT, "amd64", "movq %rsp, %rbp # save frame\n", []string{"MOVQ SP, BP"}, []string{"save frame"})
 	checkTranslate(t, Intel, "amd64", "mov rbp, rsp ; intel form\n", []string{"MOVQ SP, BP"}, []string{"intel form"})
+}
+
+func TestTranslateContextControlsPCALIGN(t *testing.T) {
+	src := ".p2align 4, 0x90\nret\n"
+	out, err := Translate(src, Context{Syntax: ATT, Arch: "amd64", GoVersion: "go1.21"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, out, "// .p2align 4, 0x90")
+	mustNotContain(t, out, "PCALIGN")
+
+	out, err = Translate(src, Context{Syntax: ATT, Arch: "amd64", GoVersion: "go1.26"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, out, "PCALIGN $16")
 }
 
 func TestTranslateMemoryAddressingForms(t *testing.T) {
@@ -210,9 +226,13 @@ main:
 `, []string{"CALL AX", "JMP 8(BP)"}, []string{"rax(SB)", "[rbp+8](SB)"})
 }
 
-func checkTranslate(t *testing.T, syntax, arch, input string, want, notWant []string) string {
+func checkTranslate(t *testing.T, syntax, arch, input string, want, notWant []string, ctx ...Context) string {
 	t.Helper()
-	out, err := Translate(syntax, arch, strings.TrimSpace(input)+"\n")
+	asmCtx := Context{Syntax: syntax, Arch: arch}
+	if len(ctx) > 0 {
+		asmCtx = ctx[0]
+	}
+	out, err := Translate(strings.TrimSpace(input)+"\n", asmCtx)
 	if err != nil {
 		t.Fatalf("Translate(%s/%s) error = %v", syntax, arch, err)
 	}
