@@ -85,31 +85,107 @@ func usesUnsafe(funcs []funcSpec) bool {
 }
 
 func wrapAssembly(asm string, funcs []funcSpec, goos, arch string) string {
+	specs := make(map[string]funcSpec, len(funcs))
+	direct := make(map[string]bool, len(funcs))
 	for _, fn := range funcs {
-		asm = strings.ReplaceAll(asm, compilerSymbol(goos, fn.CName)+"(SB)", rawSymbol(fn.CName)+"(SB)")
-	}
-	asm = strings.TrimRight(asm, "\n")
-	if asm != "" {
-		asm += "\n\n"
-	}
-	for i, fn := range funcs {
-		if i > 0 {
-			asm += "\n"
+		csym := compilerSymbol(goos, fn.CName) + "(SB)"
+		if strings.Count(asm, csym) > 1 {
+			sym := rawSymbol(fn.CName) + "(SB)"
+			asm = strings.ReplaceAll(asm, csym, sym)
+			specs[sym] = fn
+			continue
 		}
-		asm += renderWrapper(fn, arch)
+		sym := packageDot + fn.GoName + "(SB)"
+		asm = strings.ReplaceAll(asm, csym, sym)
+		specs[sym] = fn
+		direct[sym] = true
 	}
-	return asm
+	lines := strings.Split(strings.TrimRight(asm, "\n"), "\n")
+	var out, wrappers []string
+	for i := 0; i < len(lines); {
+		sym := textSymbol(lines[i])
+		fn, ok := specs[sym]
+		if !ok {
+			out = append(out, lines[i])
+			i++
+			continue
+		}
+		end := nextText(lines, i+1)
+		if direct[sym] {
+			out = append(out, inlineBlock(lines[i:end], fn, arch)...)
+		} else {
+			out = append(out, lines[i:end]...)
+			wrappers = append(wrappers, renderWrapper(fn, arch))
+		}
+		i = end
+	}
+	if len(wrappers) > 0 {
+		out = append(out, "")
+		out = append(out, strings.Join(wrappers, "\n"))
+	}
+	return strings.Join(out, "\n") + "\n"
+}
+
+func nextText(lines []string, start int) int {
+	for i := start; i < len(lines); i++ {
+		if strings.HasPrefix(lines[i], "TEXT ") {
+			return i
+		}
+	}
+	return len(lines)
+}
+
+func inlineBlock(block []string, fn funcSpec, arch string) []string {
+	paramOffsets, retOffset, argSize := frameOffsets(fn)
+	var b strings.Builder
+	fmt.Fprintln(&b, inlineTextHeader(block[0], fn, argSize))
+	renderParams(&b, fn, arch, paramOffsets)
+	out := strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
+	for _, line := range block[1:] {
+		if strings.TrimSpace(line) == "RET" && fn.Return.Kind != voidType {
+			out = append(out, fmt.Sprintf("\t%s %s, ret+%d(FP)", storeOp(fn.Return, arch), returnReg(arch), retOffset))
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+func textSymbol(line string) string {
+	if !strings.HasPrefix(line, "TEXT ") {
+		return ""
+	}
+	line = line[len("TEXT "):]
+	if i := strings.Index(line, ","); i >= 0 {
+		return strings.TrimSpace(line[:i])
+	}
+	return ""
+}
+
+func inlineTextHeader(line string, fn funcSpec, argSize int) string {
+	line = strings.Replace(line, "|NOFRAME", "", 1)
+	if i := strings.LastIndex(line, ", "); i >= 0 {
+		frame := line[i+2:]
+		if j := strings.Index(frame, "-"); j >= 0 {
+			frame = frame[:j]
+		}
+		line = line[:i+2] + frame + fmt.Sprintf("-%d", argSize)
+	}
+	return line
+}
+
+func renderParams(b *strings.Builder, fn funcSpec, arch string, offsets []int) {
+	regs := argRegs(arch)
+	reg := 0
+	for i, p := range fn.Params {
+		reg = renderParam(b, p, offsets[i], reg, regs, arch)
+	}
 }
 
 func renderWrapper(fn funcSpec, arch string) string {
 	var b strings.Builder
 	paramOffsets, retOffset, argSize := frameOffsets(fn)
 	fmt.Fprintf(&b, "TEXT %s%s(SB), NOSPLIT, $0-%d\n", packageDot, fn.GoName, argSize)
-	regs := argRegs(arch)
-	reg := 0
-	for i, p := range fn.Params {
-		reg = renderParam(&b, p, paramOffsets[i], reg, regs, arch)
-	}
+	renderParams(&b, fn, arch, paramOffsets)
 	fmt.Fprintf(&b, "\tCALL %s(SB)\n", rawSymbol(fn.CName))
 	if fn.Return.Kind != voidType {
 		fmt.Fprintf(&b, "\t%s %s, ret+%d(FP)\n", storeOp(fn.Return, arch), returnReg(arch), retOffset)

@@ -107,16 +107,8 @@ void *id_ptr(void *p) { return p; }
 	}
 	asm := textForSymbols(goos, []string{"add", "add64", "first", "strlen1", "id_ushort", "id_uint", "id_ptr"})
 	got := wrapAssembly(asm, funcs, goos, arch)
-	mustContain(t, got, append([]string{
-		"TEXT c2go_add(SB), NOSPLIT|NOFRAME, $0",
-		"TEXT c2go_add64(SB), NOSPLIT|NOFRAME, $0",
-		"TEXT c2go_first(SB), NOSPLIT|NOFRAME, $0",
-		"TEXT c2go_strlen1(SB), NOSPLIT|NOFRAME, $0",
-		"TEXT c2go_id_ushort(SB), NOSPLIT|NOFRAME, $0",
-		"TEXT c2go_id_uint(SB), NOSPLIT|NOFRAME, $0",
-		"TEXT c2go_id_ptr(SB), NOSPLIT|NOFRAME, $0",
-		"CALL c2go_add(SB)",
-	}, hostWrapperChecks(arch)...)...)
+	mustContain(t, got, hostWrapperChecks(arch)...)
+	mustNotContain(t, got, "CALL c2go_add(SB)", "TEXT c2go_add(SB)")
 	if strings.Contains(got, "TEXT "+compilerSymbol(goos, "add")+"(SB)") {
 		t.Fatalf("compiler symbol should be renamed\n%s", got)
 	}
@@ -132,6 +124,23 @@ const char *bad(const char *buf, size_t buf_len) { return buf; }`, goos, arch)
 	if !strings.Contains(err.Error(), "[]byte/string returns are not supported") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+func TestWrapAssemblyKeepsCABIEntryWhenReferenced(t *testing.T) {
+	goos, arch := currentTarget(t)
+	funcs, err := parseFunctions(`//go:c2go
+int caller(int x) { return callee(x); }
+//go:c2go
+int callee(int x) { return x + 1; }
+`, goos, arch)
+	if err != nil {
+		t.Fatalf("parseFunctions() error = %v", err)
+	}
+	asm := "#include \"textflag.h\"\n\n" +
+		"TEXT " + compilerSymbol(goos, "caller") + "(SB), NOSPLIT|NOFRAME, $0\n\tCALL " + compilerSymbol(goos, "callee") + "(SB)\n\tRET\n\n" +
+		"TEXT " + compilerSymbol(goos, "callee") + "(SB), NOSPLIT|NOFRAME, $0\n\tRET\n"
+	got := wrapAssembly(asm, funcs, goos, arch)
+	mustContain(t, got, "TEXT ·Caller(SB), NOSPLIT, $0-12", "CALL c2go_callee(SB)", "TEXT c2go_callee(SB), NOSPLIT|NOFRAME, $0", "TEXT ·Callee(SB), NOSPLIT, $0-12")
 }
 
 func TestCharPointerParamsRequireSizeTLength(t *testing.T) {
@@ -230,6 +239,15 @@ func mustContain(t *testing.T, text string, checks ...string) {
 	for _, want := range checks {
 		if !strings.Contains(text, want) {
 			t.Fatalf("output missing %q\n%s", want, text)
+		}
+	}
+}
+
+func mustNotContain(t *testing.T, text string, checks ...string) {
+	t.Helper()
+	for _, unwanted := range checks {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("output contains unwanted %q\n%s", unwanted, text)
 		}
 	}
 }

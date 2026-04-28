@@ -312,9 +312,8 @@ func mustContainAny(t *testing.T, text string, checks ...string) {
 }
 
 func packageAsmChecks(arch string) []string {
-	checks := []string{"TEXT c2go_add(SB), NOSPLIT|NOFRAME, $0", "CALL c2go_add(SB)"}
 	if arch == asmconv.ArchARM64 {
-		return append(checks, "TEXT ·Add(SB), NOSPLIT, $0-12", "MOVW a+0(FP), R0")
+		return []string{"TEXT ·Add(SB), NOSPLIT, $0-12", "MOVW a+0(FP), R0"}
 	}
-	return append(checks, "TEXT ·Add(SB), NOSPLIT, $0-12", "MOVL a+0(FP), DI")
+	return []string{"TEXT ·Add(SB), NOSPLIT, $0-12", "MOVL a+0(FP), DI"}
 }
