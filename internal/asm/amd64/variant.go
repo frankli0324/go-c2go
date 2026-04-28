@@ -6,14 +6,14 @@ import (
 	"github.com/frankli0324/go-c2go/internal/asm/asmutil"
 )
 
-func Resolve(variant string) (asmutil.Translator, error) {
+func Resolve(variant string, trustFixedRegs []string) (asmutil.Translator, error) {
 	switch variant {
 	case "", "auto":
-		return ATT{}, nil
+		return &ATT{trustFixedRegs: trustFixedRegs}, nil
 	case "att":
-		return ATT{}, nil
+		return &ATT{trustFixedRegs: trustFixedRegs}, nil
 	case "intel":
-		return Intel{}, nil
+		return &Intel{trustFixedRegs: trustFixedRegs}, nil
 	case "plan9":
 		return nil, fmt.Errorf("asm syntax %q is not implemented yet", variant)
 	default:

@@ -8,18 +8,14 @@ import (
 )
 
 func pair(form *spec, args []string) (string, error) {
-	if len(args) != 3 && len(args) != 4 {
+	if len(args) != 4 {
 		return "", fmt.Errorf("unsupported arm64 pair op")
 	}
-	mn := form.mn
+	mem, suffix := args[2], args[3]
 	left, right, err := pairRegisters(args[0], args[1])
 	if err != nil {
 		return "", err
 	}
-	if len(args) == 4 {
-		mn += args[3]
-	}
-	mem := args[2]
 	if isFloatReg(args[0]) {
 		if form.mn == "LDP" {
 			return "FLDPQ " + mem + ", (" + left + ", " + right + ")", nil
@@ -27,30 +23,9 @@ func pair(form *spec, args []string) (string, error) {
 		return "FSTPQ (" + left + ", " + right + "), " + mem, nil
 	}
 	if form.mn == "LDP" {
-		return mn + " " + mem + ", (" + left + ", " + right + ")", nil
+		return form.mn + suffix + " " + mem + ", (" + left + ", " + right + ")", nil
 	}
-	return mn + " (" + left + ", " + right + "), " + mem, nil
-}
-
-func preparePair(t *Translator, args []string) ([]string, error) {
-	if len(args) != 3 && len(args) != 4 {
-		return nil, fmt.Errorf("unsupported arm64 pair op")
-	}
-	out := []string{args[0], args[1], args[2]}
-	memArg := args[2]
-	if len(args) == 4 {
-		memArg = strings.TrimSuffix(memArg, "]") + ", " + args[3] + "]"
-		out = append(out, ".P")
-	} else if strings.HasSuffix(strings.TrimSpace(memArg), "]!") {
-		memArg = strings.TrimSuffix(strings.TrimSpace(memArg), "!")
-		out = append(out, ".W")
-	}
-	mem, err := t.memory(memArg)
-	if err != nil {
-		return nil, err
-	}
-	out[2] = mem
-	return out, nil
+	return form.mn + suffix + " (" + left + ", " + right + "), " + mem, nil
 }
 
 func pairRegisters(a, b string) (string, string, error) {
@@ -62,11 +37,24 @@ func pairRegisters(a, b string) (string, string, error) {
 		right, err := floatRegister(b)
 		return left, right, err
 	}
-	ops, err := operands(a, b)
-	if err != nil {
-		return "", "", err
+	left, leftErr := register(a)
+	right, rightErr := register(b)
+	if leftErr == nil && rightErr == nil {
+		return left, right, nil
 	}
-	return ops[0], ops[1], nil
+	if leftErr != nil {
+		left, leftErr = pairReservedRegister(a)
+	}
+	if rightErr != nil {
+		right, rightErr = pairReservedRegister(b)
+	}
+	if leftErr != nil {
+		return "", "", leftErr
+	}
+	if rightErr != nil {
+		return "", "", rightErr
+	}
+	return left, right, nil
 }
 
 func floatMove(form *spec, args []string) (string, error) {
@@ -93,9 +81,7 @@ type spec struct {
 	mn           string
 	wmn          string
 	clearDst     bool
-	clearPair    bool
 	rememberPage bool
-	pairMem      bool
 }
 
 type opType int
@@ -146,8 +132,8 @@ var opSpecs = map[string]spec{
 	"tbz":  {typ: opBitBranch, mn: "TBZ"},
 	"tbnz": {typ: opBitBranch, mn: "TBNZ"},
 
-	"stp":  {typ: opPair, mn: "STP", pairMem: true},
-	"ldp":  {typ: opPair, mn: "LDP", clearPair: true, pairMem: true},
+	"stp":  {typ: opPair, mn: "STP"},
+	"ldp":  {typ: opPair, mn: "LDP"},
 	"fmov": {typ: opFloatMove, mn: "FMOVD", clearDst: true},
 	"adrp": {typ: opADRP, mn: "MOVD", rememberPage: true},
 	"adr":  {typ: opADR, mn: "ADR", clearDst: true},
@@ -218,6 +204,7 @@ var opHandlers = map[opType]opHandler{
 }
 
 func translateOp(t *Translator, op string, args []string) (string, bool, error) {
+	prepared := args
 	if op == "add" && len(args) == 3 {
 		if _, ok := pageOffsetSymbol(args[2]); ok {
 			out, err := t.pageAdd(args)
@@ -231,6 +218,20 @@ func translateOp(t *Translator, op string, args []string) (string, bool, error) 
 	if strings.HasPrefix(op, "str") || strings.HasPrefix(op, "stur") {
 		out, err := t.store(op, args)
 		return out, true, err
+	}
+	if op == "stp" || op == "ldp" {
+		if len(args) != 3 && len(args) != 4 {
+			return "", true, fmt.Errorf("unsupported arm64 pair op")
+		}
+		mem, suffix, err := t.pairMemory(args[2:])
+		if err != nil {
+			return "", true, err
+		}
+		if op == "ldp" {
+			t.clear(args[0])
+			t.clear(args[1])
+		}
+		prepared = []string{args[0], args[1], mem, suffix}
 	}
 	if len(args) == 2 && (strings.HasPrefix(op, "mov.") || (op == "mov" && (isVectorArg(args[0]) || isVectorArg(args[1])))) {
 		t.clear(args[0])
@@ -246,13 +247,8 @@ func translateOp(t *Translator, op string, args []string) (string, bool, error) 
 	if !ok {
 		return "", false, nil
 	}
-	prepared := args
-	if form.pairMem {
-		var err error
-		prepared, err = preparePair(t, args)
-		if err != nil {
-			return "", true, err
-		}
+	if form.clearDst && len(args) > 0 {
+		t.clear(args[0])
 	}
 	out, err := opHandlers[form.typ](&form, prepared)
 	if err != nil {
@@ -264,12 +260,6 @@ func translateOp(t *Translator, op string, args []string) (string, bool, error) 
 			return "", true, err
 		}
 		t.remember(dst, pageSymbol(args[1]))
-	}
-	if form.clearPair {
-		t.clear(args[0])
-		t.clear(args[1])
-	} else if form.clearDst {
-		t.clear(args[0])
 	}
 	return out, true, nil
 }

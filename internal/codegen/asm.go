@@ -3,6 +3,7 @@ package codegen
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -106,6 +107,9 @@ func (b *asmFileBuilder) addLabel(label string) {
 
 func (b *asmFileBuilder) addComment(line string) {
 	switch {
+	case b.current == nil && b.pendingLabel != "" && isFrameMarker(line):
+		b.startFunc(b.pendingLabel)
+		b.current.body = append(b.current.body, "\t"+line)
 	case b.current == nil:
 		b.addPreambleComment(line)
 	default:
@@ -198,7 +202,7 @@ func render(fileComments []string, data []asmData, funcs []asmFunc) string {
 		if i > 0 {
 			out = append(out, "")
 		}
-		body, frame := rewritePushPopFrame(fn.body)
+		body, frame := frameFromMarkers(fn.body)
 		flags := defaultFuncFlags
 		if frame > 0 {
 			flags = strings.ReplaceAll(flags, "|NOFRAME", "")
@@ -214,50 +218,33 @@ func render(fileComments []string, data []asmData, funcs []asmFunc) string {
 	return strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n"
 }
 
-func rewritePushPopFrame(body []string) ([]string, int) {
-	var regs []string
-	for _, line := range body {
-		reg, ok := pushReg(line)
-		if !ok {
-			break
-		}
-		regs = append(regs, reg)
-	}
-	if len(regs) == 0 {
-		return body, 0
-	}
-	slots := make(map[string]int, len(regs))
+func frameFromMarkers(body []string) ([]string, int) {
 	out := make([]string, 0, len(body))
-	for i, reg := range regs {
-		slots[reg] = i * 8
-		out = append(out, fmt.Sprintf("\tMOVQ %s, %d(SP)", reg, i*8))
-	}
-	for _, line := range body[len(regs):] {
-		if reg, ok := popReg(line); ok {
-			if offset, ok := slots[reg]; ok {
-				out = append(out, fmt.Sprintf("\tMOVQ %d(SP), %s", offset, reg))
-				continue
+	frame := 0
+	for _, line := range body {
+		if size, ok := frameMarker(line); ok {
+			if size > frame {
+				frame = size
 			}
+			continue
 		}
 		out = append(out, line)
 	}
-	return out, len(regs) * 8
+	return out, frame
 }
 
-func pushReg(line string) (string, bool) {
-	fields := strings.Fields(strings.TrimSpace(line))
-	if len(fields) == 2 && fields[0] == "PUSHQ" {
-		return fields[1], true
+func frameMarker(line string) (int, bool) {
+	fields := strings.Fields(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "//")))
+	if len(fields) == 3 && fields[0] == "c2go:" && fields[1] == "frame" {
+		n, err := strconv.Atoi(fields[2])
+		return n, err == nil && n > 0
 	}
-	return "", false
+	return 0, false
 }
 
-func popReg(line string) (string, bool) {
-	fields := strings.Fields(strings.TrimSpace(line))
-	if len(fields) == 2 && fields[0] == "POPQ" {
-		return fields[1], true
-	}
-	return "", false
+func isFrameMarker(line string) bool {
+	_, ok := frameMarker(line)
+	return ok
 }
 
 func dataSize(values []string) int {

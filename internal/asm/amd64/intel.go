@@ -7,13 +7,17 @@ import (
 	"github.com/frankli0324/go-c2go/internal/asm/asmutil"
 )
 
-type Intel struct{}
+type Intel struct {
+	frame          frame
+	savedRegs      uint64
+	trustFixedRegs []string
+}
 
-func (Intel) CommentPrefix() string {
+func (*Intel) CommentPrefix() string {
 	return ";"
 }
 
-func (Intel) TranslateInstruction(indent, line string) (string, bool) {
+func (t *Intel) TranslateInstruction(indent, line string) (string, bool) {
 	fields := strings.Fields(line)
 	if len(fields) == 0 {
 		return indent, false
@@ -21,6 +25,15 @@ func (Intel) TranslateInstruction(indent, line string) (string, bool) {
 	op := strings.ToLower(fields[0])
 	argsText := strings.TrimSpace(strings.TrimPrefix(line, fields[0]))
 	args := asmutil.SplitOperands(argsText)
+	if reg, ok := pushPopReg(op, args); ok {
+		out, ok := t.pushPop(op, reg, line)
+		if ok {
+			return indent + out, false
+		}
+	}
+	if reservedMask(args)&^t.savedRegs != 0 {
+		return indent + "// UNSUPPORTED: " + line, true
+	}
 	if op == "cdqe" {
 		return indent + "MOVLQSX AX, AX", false
 	}

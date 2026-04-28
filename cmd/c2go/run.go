@@ -88,15 +88,16 @@ func generatePackage(cfg config) error {
 
 func generate(cfg config) error {
 	compileCfg := buildPlan(cfg)
-	asm, err := compileC(compileCfg)
+	asm, compilePlan, err := compileC(compileCfg)
 	if err != nil {
 		return err
 	}
 
 	rewritten, err := asmconv.Translate(asm, asmconv.Context{
-		Syntax:    cfg.syntax,
-		Arch:      compileCfg.arch,
-		GoVersion: currentModuleGoVersion(),
+		Syntax:         cfg.syntax,
+		Arch:           compileCfg.arch,
+		GoVersion:      currentModuleGoVersion(),
+		TrustFixedRegs: compilePlan.trustFixedRegs,
 	})
 	var unsupported asmconv.UnsupportedError
 	if err != nil && !errors.As(err, &unsupported) {

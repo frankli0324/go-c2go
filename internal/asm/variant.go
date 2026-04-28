@@ -25,9 +25,10 @@ type UnsupportedError struct {
 }
 
 type Context struct {
-	Syntax    string
-	Arch      string
-	GoVersion string
+	Syntax         string
+	Arch           string
+	GoVersion      string
+	TrustFixedRegs []string
 }
 
 func (e UnsupportedError) Error() string {
@@ -55,9 +56,9 @@ func (ctx Context) translator() (translator, error) {
 	variant := Resolve(ctx.Syntax)
 	switch ctx.Arch {
 	case ArchAMD64:
-		return amd64.Resolve(variant)
+		return amd64.Resolve(variant, ctx.TrustFixedRegs)
 	case ArchARM64:
-		return arm64.Resolve(variant)
+		return arm64.Resolve(variant, ctx.TrustFixedRegs)
 	default:
 		return nil, fmt.Errorf("asm translation spec currently only supports amd64 and arm64, got %q", ctx.Arch)
 	}

@@ -116,6 +116,48 @@ func numberedGPR(key string) (int, string, bool) {
 	return n, suffix, err == nil && n >= 8 && n <= 15 && (suffix == "" || suffix == "d" || suffix == "w" || suffix == "b")
 }
 
+func reservedRegNumber(name string) (int, bool) {
+	key := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(name, "%")))
+	if strings.HasPrefix(key, "r") {
+		rest := strings.TrimPrefix(key, "r")
+		digits := strings.TrimRight(rest, "dwb")
+		n, err := strconv.Atoi(digits)
+		return n, err == nil && n >= 12 && n <= 15
+	}
+	if strings.HasPrefix(key, "r") || len(key) < 2 || key[0] != 'R' {
+		return 0, false
+	}
+	n, err := strconv.Atoi(key[1:])
+	return n, err == nil && n >= 12 && n <= 15
+}
+
+func reservedRegMask(reg string) uint64 {
+	if n, ok := reservedRegNumber(reg); ok {
+		return 1 << n
+	}
+	return 0
+}
+
+func reservedMask(args []string) uint64 {
+	var mask uint64
+	for _, arg := range args {
+		for _, token := range strings.FieldsFunc(arg, func(r rune) bool {
+			return (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '%'
+		}) {
+			mask |= reservedRegMask(token)
+		}
+	}
+	return mask
+}
+
+func fixedRegMask(regs []string) uint64 {
+	var mask uint64
+	for _, reg := range regs {
+		mask |= reservedRegMask(reg)
+	}
+	return mask
+}
+
 func widthFromSuffix(suffix string) (string, bool) {
 	switch suffix {
 	case "":

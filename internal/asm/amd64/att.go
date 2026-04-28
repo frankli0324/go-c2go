@@ -10,13 +10,17 @@ import (
 
 var attMemoryRE = regexp.MustCompile(`^(.*)\(%?([^,]*)(?:,%([^,]*)(?:,(\d+))?)?\)$`)
 
-type ATT struct{}
+type ATT struct {
+	frame          frame
+	savedRegs      uint64
+	trustFixedRegs []string
+}
 
-func (ATT) CommentPrefix() string {
+func (*ATT) CommentPrefix() string {
 	return "#"
 }
 
-func (ATT) TranslateInstruction(indent, line string) (string, bool) {
+func (t *ATT) TranslateInstruction(indent, line string) (string, bool) {
 	fields := strings.Fields(line)
 	if len(fields) == 0 {
 		return indent, false
@@ -25,6 +29,15 @@ func (ATT) TranslateInstruction(indent, line string) (string, bool) {
 	op := strings.ToLower(rawOp)
 	argsText := strings.TrimSpace(strings.TrimPrefix(line, rawOp))
 	args := asmutil.SplitOperands(argsText)
+	if reg, ok := pushPopReg(op, args); ok {
+		out, ok := t.pushPop(op, reg, line)
+		if ok {
+			return indent + out, false
+		}
+	}
+	if reservedMask(args)&^t.savedRegs != 0 {
+		return indent + "// UNSUPPORTED: " + line, true
+	}
 	if op == "cltq" {
 		return indent + "MOVLQSX AX, AX", false
 	}

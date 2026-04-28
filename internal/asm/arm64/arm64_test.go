@@ -155,7 +155,6 @@ func TestReservedRegistersRejected(t *testing.T) {
 		"ldr x0, [x27]",
 		"str x28, [x0]",
 		"adr x29, Ltmp0",
-		"mov x30, x0",
 	} {
 		var tr Translator
 		out, bad := tr.TranslateInstruction("", line)
@@ -163,6 +162,62 @@ func TestReservedRegistersRejected(t *testing.T) {
 			t.Fatalf("TranslateInstruction(%q) = %q, want unsupported", line, out)
 		}
 		mustContain(t, out, "// UNSUPPORTED: "+line)
+	}
+}
+
+func TestPairSaveRestore(t *testing.T) {
+	out := translateARM64(t, `
+stp x26, x25, [sp, #16]
+ldp x29, x30, [sp, #80]
+add x30, x4, #1
+cmp x30, x1
+csel x30, x24, x10, lo
+ldrb w30, [x30, #1]
+orr x25, x25, x30, lsl #8
+`)
+	mustContain(t, out,
+		"STP (R26, R25), 16(RSP)",
+		"LDP 80(RSP), (R29, R30)",
+		"ADD $1, R4, R30",
+		"CMP R1, R30",
+		"CSEL LO, R24, R10, R30",
+		"MOVBU 1(R30), R30",
+		"ORR R30<<8, R25, R25",
+	)
+}
+
+func TestSavedReservedRegisterAllowedUntilRestore(t *testing.T) {
+	var tr Translator
+	for _, line := range []string{
+		"stp x26, x25, [sp, #16]",
+		"add x0, x26, x1",
+		"ldp x26, x25, [sp, #24]",
+		"add x0, x26, x1",
+		"ldp x26, x25, [sp, #16]",
+	} {
+		if out, bad := tr.TranslateInstruction("", line); bad {
+			t.Fatalf("TranslateInstruction(%q) unsupported: %s", line, out)
+		}
+	}
+	if out, bad := tr.TranslateInstruction("", "add x0, x26, x1"); !bad {
+		t.Fatalf("TranslateInstruction allowed restored reserved register: %s", out)
+	}
+}
+
+func TestDropFixedReservedSaveRestore(t *testing.T) {
+	tr := Translator{trustFixedRegs: []string{"x26", "x27", "x28"}}
+	for _, line := range []string{
+		"stp x26, x25, [sp, #16]",
+		"add x0, x26, x1",
+		"ldp x26, x25, [sp, #16]",
+	} {
+		out, bad := tr.TranslateInstruction("", line)
+		if bad {
+			t.Fatalf("TranslateInstruction(%q) unsupported: %s", line, out)
+		}
+		if strings.HasPrefix(line, "stp ") || strings.HasPrefix(line, "ldp ") {
+			mustContain(t, out, "// c2go: dropped arm64 Go ABI reserved register save/restore: "+line)
+		}
 	}
 }
 

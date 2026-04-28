@@ -24,6 +24,35 @@ pxor %xmm1, %xmm0
 	)
 }
 
+func TestPushPopFrameMarkers(t *testing.T) {
+	att := translateATT(t, `
+pushq %rbp
+popq %rbp
+`)
+	mustContain(t, att, "// c2go: frame 8", "MOVQ BP, 0(SP)", "MOVQ 0(SP), BP")
+
+	intel := translateIntel(t, `
+push rbp
+pop rbp
+`)
+	mustContain(t, intel, "// c2go: frame 8", "MOVQ BP, 0(SP)", "MOVQ 0(SP), BP")
+}
+
+func TestReservedRegistersNeedSave(t *testing.T) {
+	if out, bad := new(ATT).TranslateInstruction("", "movq %r12, %rax"); !bad {
+		t.Fatalf("ATT allowed unsaved reserved register: %s", out)
+	}
+	var att ATT
+	for _, line := range []string{"pushq %r12", "movq %r12, %rax", "popq %r12"} {
+		if out, bad := att.TranslateInstruction("", line); bad {
+			t.Fatalf("ATT unsupported %q: %s", line, out)
+		}
+	}
+	if out, bad := att.TranslateInstruction("", "movq %r12, %rax"); !bad {
+		t.Fatalf("ATT allowed restored reserved register: %s", out)
+	}
+}
+
 func TestPlan9RegisterNames(t *testing.T) {
 	cases := map[string]string{
 		"al":    "AL",
@@ -91,18 +120,18 @@ mov eax, dword ptr [rsi]
 
 func TestCompareOperandOrder(t *testing.T) {
 	att := translateATT(t, `
-cmpq %r13, %rax
+cmpq %r10, %rax
 ja Ldone
 `)
-	mustContain(t, att, "CMPQ AX, R13", "JA Ldone")
-	mustNotContain(t, att, "CMPQ R13, AX")
+	mustContain(t, att, "CMPQ AX, R10", "JA Ldone")
+	mustNotContain(t, att, "CMPQ R10, AX")
 
 	intel := translateIntel(t, `
-cmp rax, r13
+cmp rax, r10
 ja Ldone
 `)
-	mustContain(t, intel, "CMPQ AX, R13", "JA Ldone")
-	mustNotContain(t, intel, "CMPQ R13, AX")
+	mustContain(t, intel, "CMPQ AX, R10", "JA Ldone")
+	mustNotContain(t, intel, "CMPQ R10, AX")
 }
 
 func TestATTCLTQ(t *testing.T) {
@@ -112,27 +141,28 @@ func TestATTCLTQ(t *testing.T) {
 }
 
 func TestRejectsELFRelocations(t *testing.T) {
-	cases := []struct {
-		name string
-		tr   interface {
-			TranslateInstruction(string, string) (string, bool)
-		}
-		line string
-	}{
-		{"att direct plt call", ATT{}, "callq __builtin_rotateleft64@PLT"},
-		{"att gotpcrel operand", ATT{}, "movq foo@GOTPCREL(%rip), %rax"},
-		{"att gotoff operand", ATT{}, "leaq bar@GOTOFF+8(%rip), %rcx"},
-		{"att indirect gotpcrel call", ATT{}, "callq *foo@GOTPCREL(%rip)"},
-		{"att indirect gotpcrel jump", ATT{}, "jmpq *bar@GOTPCREL(%rip)"},
-		{"intel direct plt call", Intel{}, "call foo@PLT"},
-		{"intel gotpcrel operand", Intel{}, "mov rax, [rip+foo@GOTPCREL]"},
-	}
-	for _, tc := range cases {
-		out, bad := tc.tr.TranslateInstruction("", tc.line)
+	for _, line := range []string{
+		"callq __builtin_rotateleft64@PLT",
+		"movq foo@GOTPCREL(%rip), %rax",
+		"leaq bar@GOTOFF+8(%rip), %rcx",
+		"callq *foo@GOTPCREL(%rip)",
+		"jmpq *bar@GOTPCREL(%rip)",
+	} {
+		out, bad := new(ATT).TranslateInstruction("", line)
 		if !bad {
-			t.Fatalf("%s: TranslateInstruction(%q) = %q, false, want unsupported", tc.name, tc.line, out)
+			t.Fatalf("ATT TranslateInstruction(%q) = %q, false, want unsupported", line, out)
 		}
-		mustContain(t, out, "// UNSUPPORTED: "+tc.line)
+		mustContain(t, out, "// UNSUPPORTED: "+line)
+	}
+	for _, line := range []string{
+		"call foo@PLT",
+		"mov rax, [rip+foo@GOTPCREL]",
+	} {
+		out, bad := new(Intel).TranslateInstruction("", line)
+		if !bad {
+			t.Fatalf("Intel TranslateInstruction(%q) = %q, false, want unsupported", line, out)
+		}
+		mustContain(t, out, "// UNSUPPORTED: "+line)
 	}
 }
 

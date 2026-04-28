@@ -88,13 +88,14 @@ RET
 	}
 }
 
-func TestRenderAsmFileRewritesAMD64PushPopFrame(t *testing.T) {
+func TestRenderAsmFileUsesFrameMarker(t *testing.T) {
 	input := strings.TrimSpace(`
 foo:
-PUSHQ BP
+// c2go: frame 8
+MOVQ BP, 0(SP)
 MOVQ SP, BP
 CALL bar(SB)
-POPQ BP
+MOVQ 0(SP), BP
 RET
 `) + "\n"
 
@@ -115,6 +116,9 @@ RET
 	}
 	if strings.Contains(got, "NOFRAME") {
 		t.Fatalf("non-zero frame must not use NOFRAME\n%s", got)
+	}
+	if strings.Contains(got, "c2go: frame") {
+		t.Fatalf("frame marker should not be emitted\n%s", got)
 	}
 }
 

@@ -160,18 +160,50 @@ func register(name string) (string, error) {
 	if err != nil || n < 0 || n > 30 {
 		return "", fmt.Errorf("unsupported arm64 register %q", name)
 	}
-	if reservedRegister(n) {
-		return "", fmt.Errorf("reserved arm64 register %q", name)
-	}
 	return fmt.Sprintf("R%d", n), nil
 }
 
 func reservedRegister(n int) bool {
 	switch n {
-	case 18, 26, 27, 28, 29, 30:
+	case 18: // R18 is R18_PLATFORM on Apple ARM64.
 		return true
+	case 26: // R26 is REGCTXT in Go ABIInternal; it carries closure context at calls.
+		return true
+	case 27: // R27 is reserved by the Go compiler and linker.
+		return true
+	case 28: // R28 is REGG in Go ABIInternal.
+		return true
+	case 29: // R29 is FP in Go ARM64 assembly.
+		return true
+	}
+	return false
+}
+
+func reservedRegNumber(name string) (int, bool) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if len(name) < 2 || (name[0] != 'x' && name[0] != 'w') {
+		return 0, false
+	}
+	n, err := strconv.Atoi(name[1:])
+	if err != nil || !reservedRegister(n) {
+		return 0, false
+	}
+	return n, true
+}
+
+func pairReservedRegister(name string) (string, error) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	switch name {
+	case "x26", "w26": // Allow clang's R26 stack save-restore pair to translate before inline filtering.
+		return "R26", nil
+	case "x27", "w27": // Allow clang's R27 stack save-restore pair to translate before inline filtering.
+		return "R27", nil
+	case "x28", "w28": // Allow clang's R28 stack save-restore pair to translate before inline filtering.
+		return "R28", nil
+	case "x29", "w29": // Allow clang's R29/R30 frame-pointer/link-register save-restore pair.
+		return "R29", nil
 	default:
-		return false
+		return "", fmt.Errorf("reserved arm64 register %q", name)
 	}
 }
 
@@ -201,6 +233,25 @@ func (t *Translator) memory(arg string) (string, error) {
 		return "(" + base + ")(" + reg + ")", nil
 	}
 	return strings.TrimPrefix(strings.TrimSpace(parts[1]), "#") + "(" + base + ")", nil
+}
+
+func (t *Translator) pairMemory(args []string) (string, string, error) {
+	if len(args) != 1 && len(args) != 2 {
+		return "", "", fmt.Errorf("unsupported arm64 pair memory")
+	}
+	memArg := args[0]
+	if len(args) == 2 {
+		memArg = strings.TrimSuffix(memArg, "]") + ", " + args[1] + "]"
+		mem, err := t.memory(memArg)
+		return mem, ".P", err
+	}
+	if strings.HasSuffix(strings.TrimSpace(memArg), "]!") {
+		memArg = strings.TrimSuffix(strings.TrimSpace(memArg), "!")
+		mem, err := t.memory(memArg)
+		return mem, ".W", err
+	}
+	mem, err := t.memory(memArg)
+	return mem, "", err
 }
 
 func isFloatReg(arg string) bool {
