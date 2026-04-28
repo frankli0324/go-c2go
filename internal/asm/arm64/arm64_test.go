@@ -111,6 +111,8 @@ cmn x2, #7
 cset w3, lt
 sdiv x0, x1, x2
 udiv w3, w4, w5
+extr x22, x5, x16, #33
+extr w1, w2, w3, #7
 msub x6, x7, x8, x9
 adds w10, w11, #1
 adcs x12, x13, x14
@@ -130,6 +132,8 @@ ldrsw x9, [x10]
 		"CSET LT, R3",
 		"SDIV R2, R1, R0",
 		"UDIVW R5, R4, R3",
+		"EXTR $33, R16, R5, R22",
+		"EXTRW $7, R3, R2, R1",
 		"MSUB R8, R9, R7, R6",
 		"ADDSW $1, R11, R10",
 		"ADCS R14, R13, R12",

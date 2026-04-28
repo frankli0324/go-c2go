@@ -113,6 +113,7 @@ const (
 	opRightLeft
 	opSrcDst
 	opRotate
+	opExtract
 	opMulAdd
 	opCondSelect
 	opCondSet
@@ -175,6 +176,7 @@ var opSpecs = map[string]spec{
 	"rev":    {typ: opSrcDst, mn: "REV", clearDst: true},
 	"sxtw":   {typ: opSrcDst, mn: "SXTW", clearDst: true},
 	"ror":    {typ: opRotate, mn: "ROR", clearDst: true},
+	"extr":   {typ: opExtract, mn: "EXTR", wmn: "EXTRW", clearDst: true},
 	"umull":  {typ: opRightLeft, mn: "UMULL", clearDst: true},
 	"umulh":  {typ: opRightLeft, mn: "UMULH", clearDst: true},
 	"madd":   {typ: opMulAdd, mn: "MADD", clearDst: true},
@@ -205,6 +207,7 @@ var opHandlers = map[opType]opHandler{
 	opRightLeft:  rightLeftOrShifted,
 	opSrcDst:     srcDst,
 	opRotate:     rotate,
+	opExtract:    extract,
 	opMulAdd:     mulAdd,
 	opCondSelect: condSelect,
 	opCondSet:    condSet,
@@ -373,6 +376,17 @@ func rotate(form *spec, args []string) (string, error) {
 		return "", err
 	}
 	return form.mn + " " + mustOperand(args[2]) + ", " + ops[1] + ", " + ops[0], nil
+}
+
+func extract(form *spec, args []string) (string, error) {
+	if err := needArgs(args, 4); err != nil {
+		return "", err
+	}
+	ops, err := operands(args[0], args[1], args[2])
+	if err != nil {
+		return "", err
+	}
+	return mnFor(form, args[0]) + " " + mustOperand(args[3]) + ", " + ops[2] + ", " + ops[1] + ", " + ops[0], nil
 }
 
 func rightLeftDst(form *spec, args []string) (string, error) {
