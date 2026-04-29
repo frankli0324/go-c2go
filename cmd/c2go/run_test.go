@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -75,7 +76,7 @@ func TestRunGeneratesCallableGoPackage(t *testing.T) {
 	runOK(t, "-src", src, "-cc", "clang", "-arch", arch, "-syntax", "auto", "-pkg", "sample", "-o", asmPath, "-go", goPath)
 	mustContain(t, read(t, goPath), "//go:build "+arch, "package sample", "func Add(a int32, b int32) int32", "func Add64(")
 	mustContain(t, read(t, asmPath), packageAsmChecks(arch)...)
-	write(t, dir, "go.mod", "module sample\n\ngo 1.26\n")
+	write(t, dir, "go.mod", testGoMod())
 	write(t, dir, "sample_test.go", "package sample\n\nimport \"testing\"\n\nfunc TestGenerated(t *testing.T) { _ = Add(2, 3); _ = Add64(2, 3) }\n")
 	goTest(t, dir, goos, arch, "-c", "./...")
 }
@@ -85,7 +86,7 @@ func TestRunPackageModeForGoGenerate(t *testing.T) {
 	dir := t.TempDir()
 	writeAll(t, dir, map[string]string{
 		"generate.go": "package sample\n\n//go:generate go run github.com/frankli0324/go-c2go/cmd/c2go -c sample.c\n",
-		"go.mod":      "module sample\n\ngo 1.26\n",
+		"go.mod":      testGoMod(),
 		"sample.c": `
 //go:build ignore
 #include <stddef.h>
@@ -125,6 +126,9 @@ func TestGeneratedC(t *testing.T) {
 			t.Fatalf("expected generated file %s: %v", name, err)
 		}
 	}
+	if arch == asmconv.ArchAMD64 && testGoAtLeast(1, 22) {
+		mustContain(t, read(t, filepath.Join(dir, "sample_c2go_"+arch+".s")), "PCALIGN")
+	}
 	mustContain(t, read(t, filepath.Join(dir, "sample_c2go.go")), "//go:build "+arch)
 	mustContain(t, read(t, filepath.Join(dir, "sample_c2go_generic.go")),
 		"//go:build !"+arch,
@@ -145,7 +149,7 @@ func TestRunARM64RealCMemoryForms(t *testing.T) {
 	}
 	dir := t.TempDir()
 	writeAll(t, dir, map[string]string{
-		"go.mod":      "module sample\n\ngo 1.26\n",
+		"go.mod":      testGoMod(),
 		"generate.go": "package sample\n",
 		"sample.c": `//go:build ignore
 #include <stddef.h>
@@ -183,7 +187,7 @@ func TestRunPackageModeMergesGeneratedArchTags(t *testing.T) {
 	goos, _ := requireHostCompilerTarget(t)
 	dir := t.TempDir()
 	writeAll(t, dir, map[string]string{
-		"go.mod":      "module sample\n\ngo 1.26\n",
+		"go.mod":      testGoMod(),
 		"generate.go": "package sample\n",
 		"sample.c": `//go:build ignore
 
@@ -274,6 +278,21 @@ func write(t *testing.T, dir, name, body string) string {
 		t.Fatalf("write %s: %v", name, err)
 	}
 	return path
+}
+
+func testGoMod() string {
+	parts := strings.Split(strings.TrimPrefix(runtime.Version(), "go"), ".")
+	return "module sample\n\ngo " + parts[0] + "." + parts[1] + "\n"
+}
+
+func testGoAtLeast(major, minor int) bool {
+	parts := strings.Split(strings.TrimPrefix(runtime.Version(), "go"), ".")
+	if len(parts) < 2 {
+		return false
+	}
+	gotMajor, _ := strconv.Atoi(parts[0])
+	gotMinor, _ := strconv.Atoi(parts[1])
+	return gotMajor > major || gotMajor == major && gotMinor >= minor
 }
 
 func writeAll(t *testing.T, dir string, files map[string]string) {

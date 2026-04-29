@@ -6,7 +6,7 @@ on:
 
 jobs:
   generate:
-    name: go generate (${{ matrix.os }}-${{ matrix.arch }})
+    name: go generate (${{ matrix.os }}-${{ matrix.arch }} ${{ matrix.go }})
     runs-on: ${{ matrix.runner }}
     env:
       GOTOOLCHAIN: local
@@ -16,34 +16,49 @@ jobs:
         include:
           - os: linux
             arch: amd64
+            go: '1.18.x'
             runner: ubuntu-24.04
           - os: linux
             arch: arm64
+            go: '1.18.x'
             runner: ubuntu-24.04-arm
           - os: macos
             arch: amd64
+            go: '1.18.x'
             runner: macos-15-intel
           - os: macos
             arch: arm64
+            go: '1.18.x'
             runner: macos-15
+          - os: linux
+            arch: amd64
+            go: '1.23.x'
+            runner: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version: ${{ matrix.go }}
       - name: go generate smoke
         shell: bash
         run: |
           set -euo pipefail
           work="$(mktemp -d)"
+          mod_go="$(go env GOVERSION | sed 's/^go//; s/\.[0-9]*$//')"
           printf '%s\n' \
             'module generate-smoke' \
             '' \
-            'go 1.26' \
+            "go ${mod_go}" \
             '' \
             'require github.com/frankli0324/go-c2go v0.0.0' \
             '' \
             "replace github.com/frankli0324/go-c2go => ${GITHUB_WORKSPACE}" >"${work}/go.mod"
+          printf '%s\n' \
+            '//go:build tools' \
+            '' \
+            'package sample' \
+            '' \
+            'import _ "github.com/frankli0324/go-c2go/cmd/c2go"' >"${work}/tools.go"
           printf '%s\n' \
             'package sample' \
             '' \
@@ -75,12 +90,16 @@ jobs:
             '	}' \
             '}' >"${work}/sample_test.go"
           cd "$work"
+          go mod tidy
           go generate ./...
           test -s sample_c2go.go
           test -s sample_c2go_generic.go
           test -s "sample_c2go_$(go env GOARCH).s"
           grep -q "^//go:build .*$(go env GOARCH)" sample_c2go.go
           grep -q "^//go:build !$(go env GOARCH)" sample_c2go_generic.go
+          if [ "$(go env GOARCH)" = amd64 ] && [ "${mod_go}" = "1.23" ]; then
+            grep -q 'PCALIGN' "sample_c2go_$(go env GOARCH).s"
+          fi
           go test -count=1 ./...
       - name: amd64 immintrin smoke
         if: matrix.arch == 'amd64'
