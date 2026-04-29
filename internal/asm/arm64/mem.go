@@ -188,7 +188,7 @@ func pairReservedRegister(name string) (string, error) {
 }
 
 func (t *Translator) formatMemory(parts []string) (string, error) {
-	if len(parts) == 0 || len(parts) > 2 {
+	if len(parts) == 0 || len(parts) > 3 {
 		return "", fmt.Errorf("unsupported arm64 memory")
 	}
 	base, err := register(parts[0])
@@ -205,7 +205,17 @@ func (t *Translator) formatMemory(parts []string) (string, error) {
 		return "", fmt.Errorf("arm64 symbolic memory offset %q without resolved base %s", parts[1], parts[0])
 	}
 	if reg, err := register(parts[1]); err == nil {
+		if len(parts) == 3 {
+			amount, err := shift(parts[2])
+			if err != nil {
+				return "", err
+			}
+			return "(" + base + ")(" + reg + "<<" + amount + ")", nil
+		}
 		return "(" + base + ")(" + reg + ")", nil
+	}
+	if len(parts) == 3 {
+		return "", fmt.Errorf("unsupported arm64 memory offset %q", strings.Join(parts[1:], ", "))
 	}
 	return strings.TrimPrefix(strings.TrimSpace(parts[1]), "#") + "(" + base + ")", nil
 }

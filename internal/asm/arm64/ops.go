@@ -69,6 +69,7 @@ func init() {
 	)
 	addAll(instArgs(4), []func(*spec){withW, clear},
 		arm64asm.EXTR, arm64asm.CSEL, arm64asm.BFXIL, arm64asm.UBFX, arm64asm.SBFX)
+	add(arm64asm.CNEG, instArgs(3), withW, clear)
 	addAll(rightLeftOrShifted, []func(*spec){clear},
 		arm64asm.MUL, arm64asm.UMULL, arm64asm.UMULH,
 	)

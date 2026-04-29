@@ -82,7 +82,7 @@ func isVectorOp(op string, args []string) bool {
 
 func isVectorOpName(op string) bool {
 	switch op {
-	case "add", "eor", "orr", "ushll", "ushll2", "ext", "ushl":
+	case "add", "eor", "orr", "ushll", "ushll2", "ext", "ushl", "dup":
 		return true
 	default:
 		return false
@@ -100,6 +100,12 @@ func vectorOp(op string, args []string) (string, error) {
 	}
 	lane := opLane(lower)
 	switch {
+	case strings.HasPrefix(lower, "dup.") && len(args) == 2:
+		dst, err := vectorRegisterLane(args[0], lane)
+		if err != nil {
+			return "", err
+		}
+		return "VDUP " + vectorElement(args[1]) + ", " + dst, nil
 	case strings.HasPrefix(lower, "ushll") && len(args) == 3:
 		return vectorUshll(lower, lane, args)
 	case strings.HasPrefix(lower, "ext.") && len(args) == 4:

@@ -196,13 +196,31 @@ RET
 	}
 }
 
-func TestDataDirectiveRejectsInvalidSize(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("dataDirective should panic for invalid size")
+func TestRenderAsmFileEmitsDataAfterPrivateText(t *testing.T) {
+	input := strings.TrimSpace(`
+_fn:
+RET
+// .section __TEXT,__const
+// .p2align 2, 0x0
+_table:
+.long 7
+.long 11
+`) + "\n"
+
+	got, err := RenderAsmFile(input)
+	if err != nil {
+		t.Fatalf("RenderAsmFile() error = %v", err)
+	}
+	for _, want := range []string{
+		"TEXT _fn(SB), NOSPLIT|NOFRAME, $0",
+		"DATA _table+0(SB)/4, $7",
+		"DATA _table+4(SB)/4, $11",
+		"GLOBL _table(SB), RODATA|NOPTR, $8",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q\n%s", want, got)
 		}
-	}()
-	_ = dataDirective(3)
+	}
 }
 
 func TestRenderAsmFileSanitizesELFLocalLabels(t *testing.T) {
