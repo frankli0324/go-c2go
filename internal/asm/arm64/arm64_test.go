@@ -54,6 +54,8 @@ ldr x0, [sp, #-16]!
 str q0, [x1]
 ldr q1, [x2]
 ldr x3, [x4, x5]
+stp x1, x2, [sp]
+ldp x3, x4, [sp]
 mov.16b v0, v1
 add.2d v0, v0, v1
 `)
@@ -62,6 +64,8 @@ add.2d v0, v0, v1
 		"FMOVQ F0, (R1)",
 		"FMOVQ (R2), F1",
 		"MOVD (R4)(R5), R3",
+		"STP (R1, R2), (RSP)",
+		"LDP (RSP), (R3, R4)",
 		"VMOV V1.B16, V0.B16",
 		"VADD V1.D2, V0.D2, V0.D2",
 	)
@@ -124,12 +128,13 @@ ubfx w25, w24, #2, #6
 sbfx x6, x25, #3, #9
 adr x24, Ltmp0
 ldrsw x9, [x10]
+mov x16, #2147483648
 `)
 	mustContain(t, out,
 		"TST R1, R0",
 		"TST R1<<3, R0",
 		"CMN $7, R2",
-		"CSET LT, R3",
+		"CSETW LT, R3",
 		"SDIV R2, R1, R0",
 		"UDIVW R5, R4, R3",
 		"EXTR $33, R16, R5, R22",
@@ -145,6 +150,7 @@ ldrsw x9, [x10]
 		"SBFX $3, R25, $9, R6",
 		"ADR Ltmp0, R24",
 		"MOVW (R10), R9",
+		"MOVD $2147483648, R16",
 	)
 }
 

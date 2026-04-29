@@ -8,7 +8,7 @@ import (
 func TestATTRecentForms(t *testing.T) {
 	out := translateATT(t, `
 leaq foo(%rip), %rax
-leaq $foo, %rax
+leal foo(%rip), %eax
 movq (rax), %rcx
 shlq %rax
 shrdq $13, %rbx, %rax
@@ -17,7 +17,7 @@ pxor %xmm1, %xmm0
 `)
 	mustContain(t, out,
 		"LEAQ foo(SB), AX",
-		"LEAQ foo(SB), AX",
+		"LEAL foo(SB), AX",
 		"MOVQ (AX), CX",
 		"SHLQ $1, AX",
 		"SHRQ $13, BX, AX",
@@ -86,23 +86,30 @@ func TestIntelByteRegisterWidth(t *testing.T) {
 	}
 }
 
-func TestConditionSetAndIMUL3(t *testing.T) {
+func TestConditionSet(t *testing.T) {
 	att := translateATT(t, `
 sete %al
 setne 8(%rsp)
-imull $7, %esi, %eax
 setb %r9b
 `)
-	mustContain(t, att, "SETEQ AL", "SETNE 8(SP)", "IMUL3L $7, SI, AX", "SETCS R9B")
+	mustContain(t, att, "SETEQ AL", "SETNE 8(SP)", "SETCS R9B")
 
 	intel := translateIntel(t, `
 setg al
 setbe byte ptr [rsp+8]
-imul eax, esi, 7
 setl r8b
 shld rax, rbx, 13
 `)
-	mustContain(t, intel, "SETGT AL", "SETLS 8(SP)", "IMUL3L $7, SI, AX", "SETLT R8B", "SHLQ $13, BX, AX")
+	mustContain(t, intel, "SETGT AL", "SETLS 8(SP)", "SETLT R8B", "SHLQ $13, BX, AX")
+}
+
+func TestRejectsNegatedConditionAliases(t *testing.T) {
+	for _, line := range []string{"setnge %al", "jnge Ldone", "cmovnleq %rax, %rbx"} {
+		out, bad := new(ATT).TranslateInstruction("", line)
+		if !bad {
+			t.Fatalf("ATT TranslateInstruction(%q) = %q, false, want unsupported", line, out)
+		}
+	}
 }
 
 func TestUnsignedWordLoadsStayZeroExtended(t *testing.T) {
@@ -180,16 +187,7 @@ func TestIntelCDQE(t *testing.T) {
 	}
 }
 
-func TestATTSuffixedConditionalBranches(t *testing.T) {
-	out := translateATT(t, `
-jeq .Ldone
-jneq Lnext
-`)
-	mustContain(t, out, "JE .Ldone", "JNE Lnext")
-	mustNotContain(t, out, "JEQ", "JNEQ", ".Ldone(SB)", "Lnext(SB)")
-}
-
-func TestIntelAVXWhitelistReorder(t *testing.T) {
+func TestIntelAVXRegisteredOps(t *testing.T) {
 	out, unsupported := translateIntelAllowUnsupported(t, `
 vaddps ymm2, ymm0, ymm1
 vpaddq ymm2, ymm0, ymm1

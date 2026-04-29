@@ -2,10 +2,107 @@ package arm64
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/frankli0324/go-c2go/internal/asm/asmutil"
+	"golang.org/x/arch/arm64/arm64asm"
 )
+
+var arm64Conds = map[string]arm64asm.Cond{}
+var memOps = map[string]memOp{}
+
+type memOp struct {
+	load bool
+}
+
+func init() {
+	opName := func(op arm64asm.Op) string {
+		return strings.ToLower(op.String())
+	}
+	for value := uint8(0); value <= 14; value++ {
+		cond := arm64asm.Cond{Value: value}
+		if name := cond.String(); name != "" {
+			arm64Conds[strings.ToLower(name)] = cond
+		}
+	}
+	arm64Conds["hs"] = arm64Conds["cs"]
+	arm64Conds["lo"] = arm64Conds["cc"]
+	for name, cond := range arm64Conds {
+		opSpecs["b."+name] = spec{mn: "B" + cond.String(), handler: condBranch}
+	}
+	add := func(op arm64asm.Op, h opHandler, options ...func(*spec)) {
+		form := spec{op: op, mn: op.String(), handler: h}
+		for _, option := range options {
+			option(&form)
+		}
+		opSpecs[opName(op)] = form
+	}
+	addAll := func(h opHandler, options []func(*spec), ops ...arm64asm.Op) {
+		for _, op := range ops {
+			add(op, h, options...)
+		}
+	}
+	withW := func(form *spec) { form.wmn = form.mn + "W" }
+	clear := func(form *spec) { form.clearDst = true }
+	rememberPage := func(form *spec) { form.rememberPage = true }
+	mnemonic := func(mn string) func(*spec) {
+		return func(form *spec) { form.mn = mn }
+	}
+
+	add(arm64asm.RET, instArgs(0))
+	add(arm64asm.CBZ, regBranch)
+	add(arm64asm.CBNZ, regBranch)
+	add(arm64asm.TBZ, bitBranch)
+	add(arm64asm.TBNZ, bitBranch)
+	add(arm64asm.STP, pair)
+	add(arm64asm.LDP, pair)
+	add(arm64asm.FMOV, instArgs(2), clear)
+	add(arm64asm.ADRP, adrp, mnemonic("MOVD"), rememberPage)
+	add(arm64asm.ADR, adr, clear)
+	addAll(rightLeftOrShifted, []func(*spec){withW, clear},
+		arm64asm.ADD, arm64asm.ADDS, arm64asm.ADC, arm64asm.ADCS,
+		arm64asm.AND, arm64asm.ASR, arm64asm.BIC, arm64asm.EOR,
+		arm64asm.LSL, arm64asm.LSR, arm64asm.ORR, arm64asm.SUB,
+		arm64asm.SUBS, arm64asm.SBC, arm64asm.SBCS, arm64asm.SDIV,
+		arm64asm.UDIV,
+	)
+	addAll(instArgs(4), []func(*spec){withW, clear},
+		arm64asm.EXTR, arm64asm.CSEL, arm64asm.BFXIL, arm64asm.UBFX, arm64asm.SBFX)
+	addAll(rightLeftOrShifted, []func(*spec){clear},
+		arm64asm.MUL, arm64asm.UMULL, arm64asm.UMULH,
+	)
+	addAll(instArgs(2), []func(*spec){clear},
+		arm64asm.MVN, arm64asm.REV, arm64asm.SXTW,
+	)
+	addAll(instArgs(2), []func(*spec){withW, clear},
+		arm64asm.NEG, arm64asm.NEGS,
+	)
+	add(arm64asm.ROR, instArgs(3), clear)
+	add(arm64asm.MADD, instArgs(4), clear)
+	add(arm64asm.MSUB, instArgs(4), clear)
+	add(arm64asm.UMADDL, instArgs(4), clear)
+	add(arm64asm.CSET, instArgs(2), clear)
+	add(arm64asm.MOVK, moveKeep, clear)
+	add(arm64asm.CMP, compare)
+	add(arm64asm.CMN, compare)
+	add(arm64asm.TST, compare)
+
+	addMem := func(load bool, ops ...arm64asm.Op) {
+		for _, op := range ops {
+			memOps[opName(op)] = memOp{load: load}
+		}
+	}
+	addMem(true,
+		arm64asm.LDR, arm64asm.LDUR, arm64asm.LDRB, arm64asm.LDRH,
+		arm64asm.LDRSB, arm64asm.LDRSH, arm64asm.LDRSW, arm64asm.LDURB,
+		arm64asm.LDURH, arm64asm.LDURSB, arm64asm.LDURSH, arm64asm.LDURSW,
+	)
+	addMem(false,
+		arm64asm.STR, arm64asm.STUR, arm64asm.STRB, arm64asm.STRH,
+		arm64asm.STURB, arm64asm.STURH,
+	)
+}
 
 func pair(form *spec, args []string) (string, error) {
 	if len(args) != 4 {
@@ -37,170 +134,36 @@ func pairRegisters(a, b string) (string, string, error) {
 		right, err := floatRegister(b)
 		return left, right, err
 	}
-	left, leftErr := register(a)
-	right, rightErr := register(b)
-	if leftErr == nil && rightErr == nil {
-		return left, right, nil
+	left, err := pairRegister(a)
+	if err != nil {
+		return "", "", err
 	}
-	if leftErr != nil {
-		left, leftErr = pairReservedRegister(a)
-	}
-	if rightErr != nil {
-		right, rightErr = pairReservedRegister(b)
-	}
-	if leftErr != nil {
-		return "", "", leftErr
-	}
-	if rightErr != nil {
-		return "", "", rightErr
-	}
-	return left, right, nil
+	right, err := pairRegister(b)
+	return left, right, err
 }
 
-func floatMove(form *spec, args []string) (string, error) {
-	if len(args) != 2 {
-		return "", fmt.Errorf("unsupported arm64 float move")
+func pairRegister(name string) (string, error) {
+	if reg, err := register(name); err == nil {
+		return reg, nil
 	}
-	dst, src := strings.TrimSpace(args[0]), strings.TrimSpace(args[1])
-	if !strings.HasPrefix(strings.ToLower(dst), "x") && !strings.HasPrefix(strings.ToLower(dst), "w") {
-		return "", fmt.Errorf("unsupported arm64 float move")
-	}
-	out, err := operand(dst)
-	if err != nil {
-		return "", err
-	}
-	in, err := floatRegister(src)
-	if err != nil {
-		return "", err
-	}
-	return "FMOVD " + in + ", " + out, nil
+	return pairReservedRegister(name)
 }
 
 type spec struct {
-	typ          opType
+	op           arm64asm.Op
 	mn           string
 	wmn          string
 	clearDst     bool
 	rememberPage bool
+	handler      opHandler
 }
-
-type opType int
-
-const (
-	opLiteral opType = iota
-	opBranch
-	opCondBranch
-	opRegBranch
-	opBitBranch
-	opPair
-	opFloatMove
-	opADRP
-	opADR
-	opRightLeft
-	opSrcDst
-	opRotate
-	opExtract
-	opMulAdd
-	opCondSelect
-	opCondSet
-	opBitfield
-	opMove
-	opMoveKeep
-	opCompare
-)
 
 type opHandler func(*spec, []string) (string, error)
 
 var opSpecs = map[string]spec{
-	"ret":  {typ: opLiteral, mn: "RET"},
-	"b":    {typ: opBranch, mn: "JMP"},
-	"bl":   {typ: opBranch, mn: "CALL"},
-	"b.eq": {typ: opCondBranch, mn: "BEQ"},
-	"b.ne": {typ: opCondBranch, mn: "BNE"},
-	"b.lt": {typ: opCondBranch, mn: "BLT"},
-	"b.le": {typ: opCondBranch, mn: "BLE"},
-	"b.gt": {typ: opCondBranch, mn: "BGT"},
-	"b.ge": {typ: opCondBranch, mn: "BGE"},
-	"b.lo": {typ: opCondBranch, mn: "BLO"},
-	"b.ls": {typ: opCondBranch, mn: "BLS"},
-	"b.hi": {typ: opCondBranch, mn: "BHI"},
-	"b.hs": {typ: opCondBranch, mn: "BHS"},
-	"b.mi": {typ: opCondBranch, mn: "BMI"},
-	"b.pl": {typ: opCondBranch, mn: "BPL"},
-	"cbz":  {typ: opRegBranch, mn: "CBZ"},
-	"cbnz": {typ: opRegBranch, mn: "CBNZ"},
-	"tbz":  {typ: opBitBranch, mn: "TBZ"},
-	"tbnz": {typ: opBitBranch, mn: "TBNZ"},
-
-	"stp":  {typ: opPair, mn: "STP"},
-	"ldp":  {typ: opPair, mn: "LDP"},
-	"fmov": {typ: opFloatMove, mn: "FMOVD", clearDst: true},
-	"adrp": {typ: opADRP, mn: "MOVD", rememberPage: true},
-	"adr":  {typ: opADR, mn: "ADR", clearDst: true},
-
-	"add":    {typ: opRightLeft, mn: "ADD", wmn: "ADDW", clearDst: true},
-	"adds":   {typ: opRightLeft, mn: "ADDS", wmn: "ADDSW", clearDst: true},
-	"adc":    {typ: opRightLeft, mn: "ADC", wmn: "ADCW", clearDst: true},
-	"adcs":   {typ: opRightLeft, mn: "ADCS", wmn: "ADCSW", clearDst: true},
-	"and":    {typ: opRightLeft, mn: "AND", wmn: "ANDW", clearDst: true},
-	"asr":    {typ: opRightLeft, mn: "ASR", wmn: "ASRW", clearDst: true},
-	"bic":    {typ: opRightLeft, mn: "BIC", wmn: "BICW", clearDst: true},
-	"eor":    {typ: opRightLeft, mn: "EOR", wmn: "EORW", clearDst: true},
-	"lsl":    {typ: opRightLeft, mn: "LSL", wmn: "LSLW", clearDst: true},
-	"lsr":    {typ: opRightLeft, mn: "LSR", wmn: "LSRW", clearDst: true},
-	"orr":    {typ: opRightLeft, mn: "ORR", wmn: "ORRW", clearDst: true},
-	"sub":    {typ: opRightLeft, mn: "SUB", wmn: "SUBW", clearDst: true},
-	"subs":   {typ: opRightLeft, mn: "SUBS", wmn: "SUBSW", clearDst: true},
-	"sbc":    {typ: opRightLeft, mn: "SBC", wmn: "SBCW", clearDst: true},
-	"sbcs":   {typ: opRightLeft, mn: "SBCS", wmn: "SBCSW", clearDst: true},
-	"mul":    {typ: opRightLeft, mn: "MUL", clearDst: true},
-	"sdiv":   {typ: opRightLeft, mn: "SDIV", wmn: "SDIVW", clearDst: true},
-	"udiv":   {typ: opRightLeft, mn: "UDIV", wmn: "UDIVW", clearDst: true},
-	"mvn":    {typ: opSrcDst, mn: "MVN", clearDst: true},
-	"neg":    {typ: opSrcDst, mn: "NEG", wmn: "NEGW", clearDst: true},
-	"negs":   {typ: opSrcDst, mn: "NEGS", wmn: "NEGSW", clearDst: true},
-	"rev":    {typ: opSrcDst, mn: "REV", clearDst: true},
-	"sxtw":   {typ: opSrcDst, mn: "SXTW", clearDst: true},
-	"ror":    {typ: opRotate, mn: "ROR", clearDst: true},
-	"extr":   {typ: opExtract, mn: "EXTR", wmn: "EXTRW", clearDst: true},
-	"umull":  {typ: opRightLeft, mn: "UMULL", clearDst: true},
-	"umulh":  {typ: opRightLeft, mn: "UMULH", clearDst: true},
-	"madd":   {typ: opMulAdd, mn: "MADD", clearDst: true},
-	"msub":   {typ: opMulAdd, mn: "MSUB", clearDst: true},
-	"umaddl": {typ: opMulAdd, mn: "UMADDL", clearDst: true},
-	"csel":   {typ: opCondSelect, mn: "CSEL", wmn: "CSELW", clearDst: true},
-	"cset":   {typ: opCondSet, mn: "CSET", clearDst: true},
-	"bfxil":  {typ: opBitfield, mn: "BFXIL", wmn: "BFXILW", clearDst: true},
-	"ubfx":   {typ: opBitfield, mn: "UBFX", wmn: "UBFXW", clearDst: true},
-	"sbfx":   {typ: opBitfield, mn: "SBFX", wmn: "SBFXW", clearDst: true},
-	"mov":    {typ: opMove, mn: "MOVD", wmn: "MOVW", clearDst: true},
-	"movk":   {typ: opMoveKeep, mn: "MOVK", clearDst: true},
-	"cmp":    {typ: opCompare, mn: "CMP"},
-	"cmn":    {typ: opCompare, mn: "CMN"},
-	"tst":    {typ: opCompare, mn: "TST"},
-}
-
-var opHandlers = map[opType]opHandler{
-	opLiteral:    literal,
-	opBranch:     branch,
-	opCondBranch: condBranch,
-	opRegBranch:  regBranch,
-	opBitBranch:  bitBranch,
-	opPair:       pair,
-	opFloatMove:  floatMove,
-	opADRP:       adrp,
-	opADR:        adr,
-	opRightLeft:  rightLeftOrShifted,
-	opSrcDst:     srcDst,
-	opRotate:     rotate,
-	opExtract:    extract,
-	opMulAdd:     mulAdd,
-	opCondSelect: condSelect,
-	opCondSet:    condSet,
-	opBitfield:   bitfield,
-	opMove:       move,
-	opMoveKeep:   moveKeep,
-	opCompare:    compare,
+	"b":   {mn: "JMP", handler: branch},
+	"bl":  {mn: "CALL", handler: branch},
+	"mov": {op: arm64asm.MOV, mn: "MOVD", wmn: "MOVW", clearDst: true, handler: instArgs(2)},
 }
 
 func translateOp(t *Translator, op string, args []string) (string, bool, error) {
@@ -211,11 +174,11 @@ func translateOp(t *Translator, op string, args []string) (string, bool, error) 
 			return out, true, err
 		}
 	}
-	if strings.HasPrefix(op, "ldr") || strings.HasPrefix(op, "ldur") {
-		out, err := t.load(op, args)
-		return out, true, err
-	}
-	if strings.HasPrefix(op, "str") || strings.HasPrefix(op, "stur") {
+	if mem, ok := memOps[op]; ok {
+		if mem.load {
+			out, err := t.load(op, args)
+			return out, true, err
+		}
 		out, err := t.store(op, args)
 		return out, true, err
 	}
@@ -223,7 +186,7 @@ func translateOp(t *Translator, op string, args []string) (string, bool, error) 
 		if len(args) != 3 && len(args) != 4 {
 			return "", true, fmt.Errorf("unsupported arm64 pair op")
 		}
-		mem, suffix, err := t.pairMemory(args[2:])
+		mem, suffix, err := t.memorySuffix(args[2:])
 		if err != nil {
 			return "", true, err
 		}
@@ -250,7 +213,7 @@ func translateOp(t *Translator, op string, args []string) (string, bool, error) 
 	if form.clearDst && len(args) > 0 {
 		t.clear(args[0])
 	}
-	out, err := opHandlers[form.typ](&form, prepared)
+	out, err := form.handler(&form, prepared)
 	if err != nil {
 		return "", true, err
 	}
@@ -278,13 +241,6 @@ func (t *Translator) pageAdd(args []string) (string, error) {
 		return "// add " + strings.Join(args, ", "), nil
 	}
 	return "MOVD " + ops[1] + ", " + ops[0], nil
-}
-
-func literal(form *spec, args []string) (string, error) {
-	if err := needArgs(args, 0); err != nil {
-		return "", err
-	}
-	return form.mn, nil
 }
 
 func branch(form *spec, args []string) (string, error) {
@@ -346,54 +302,10 @@ func adr(form *spec, args []string) (string, error) {
 	return form.mn + " " + args[1] + ", " + dst, nil
 }
 
-func srcDst(form *spec, args []string) (string, error) {
-	if err := needArgs(args, 2); err != nil {
-		return "", err
-	}
-	ops, err := operands(args[0], args[1])
-	if err != nil {
-		return "", err
-	}
-	return mnFor(form, args[0]) + " " + ops[1] + ", " + ops[0], nil
-}
-
-func rotate(form *spec, args []string) (string, error) {
-	if err := needArgs(args, 3); err != nil {
-		return "", err
-	}
-	ops, err := operands(args[0], args[1])
-	if err != nil {
-		return "", err
-	}
-	return form.mn + " " + mustOperand(args[2]) + ", " + ops[1] + ", " + ops[0], nil
-}
-
-func extract(form *spec, args []string) (string, error) {
-	if err := needArgs(args, 4); err != nil {
-		return "", err
-	}
-	ops, err := operands(args[0], args[1], args[2])
-	if err != nil {
-		return "", err
-	}
-	return mnFor(form, args[0]) + " " + mustOperand(args[3]) + ", " + ops[2] + ", " + ops[1] + ", " + ops[0], nil
-}
-
-func rightLeftDst(form *spec, args []string) (string, error) {
-	if err := needArgs(args, 3); err != nil {
-		return "", err
-	}
-	ops, err := operands(args[0], args[1], args[2])
-	if err != nil {
-		return "", err
-	}
-	return mnFor(form, args[0]) + " " + ops[2] + ", " + ops[1] + ", " + ops[0], nil
-}
-
 func rightLeftOrShifted(form *spec, args []string) (string, error) {
 	switch len(args) {
 	case 3:
-		return rightLeftDst(form, args)
+		return goSyntaxForm(form, args...)
 	case 4:
 		return shifted(form, args)
 	default:
@@ -414,61 +326,6 @@ func shifted(form *spec, args []string) (string, error) {
 		return "", err
 	}
 	return mnFor(form, args[0]) + " " + right + ", " + ops[1] + ", " + ops[0], nil
-}
-
-func mulAdd(form *spec, args []string) (string, error) {
-	if err := needArgs(args, 4); err != nil {
-		return "", err
-	}
-	ops, err := operands(args[0], args[1], args[2], args[3])
-	if err != nil {
-		return "", err
-	}
-	return form.mn + " " + ops[2] + ", " + ops[3] + ", " + ops[1] + ", " + ops[0], nil
-}
-
-func condSelect(form *spec, args []string) (string, error) {
-	if err := needArgs(args, 4); err != nil {
-		return "", err
-	}
-	ops, err := operands(args[0], args[1], args[2])
-	if err != nil {
-		return "", err
-	}
-	return mnFor(form, args[0]) + " " + strings.ToUpper(args[3]) + ", " + ops[1] + ", " + ops[2] + ", " + ops[0], nil
-}
-
-func condSet(form *spec, args []string) (string, error) {
-	if err := needArgs(args, 2); err != nil {
-		return "", err
-	}
-	dst, err := operand(args[0])
-	if err != nil {
-		return "", err
-	}
-	return form.mn + " " + strings.ToUpper(args[1]) + ", " + dst, nil
-}
-
-func bitfield(form *spec, args []string) (string, error) {
-	if err := needArgs(args, 4); err != nil {
-		return "", err
-	}
-	ops, err := operands(args[0], args[1])
-	if err != nil {
-		return "", err
-	}
-	return mnFor(form, args[0]) + " " + mustOperand(args[2]) + ", " + ops[1] + ", " + mustOperand(args[3]) + ", " + ops[0], nil
-}
-
-func move(form *spec, args []string) (string, error) {
-	if err := needArgs(args, 2); err != nil {
-		return "", err
-	}
-	ops, err := operands(args[0], args[1])
-	if err != nil {
-		return "", err
-	}
-	return mnFor(form, args[0]) + " " + ops[1] + ", " + ops[0], nil
 }
 
 func moveKeep(form *spec, args []string) (string, error) {
@@ -497,10 +354,60 @@ func compare(form *spec, args []string) (string, error) {
 		}
 		return form.mn + " " + left + ", " + mustOperand(args[0]), nil
 	}
-	if err := needArgs(args, 2); err != nil {
-		return "", err
+	return goSyntaxForm(form, args...)
+}
+
+func instArgs(want int) opHandler {
+	return func(form *spec, args []string) (string, error) {
+		if err := needArgs(args, want); err != nil {
+			return "", err
+		}
+		return goSyntaxForm(form, args...)
 	}
-	return form.mn + " " + mustOperand(args[1]) + ", " + mustOperand(args[0]), nil
+}
+
+func goSyntaxForm(form *spec, args ...string) (string, error) {
+	converted := make([]arm64asm.Arg, len(args))
+	for i, arg := range args {
+		out, err := asmArg(arg)
+		if err != nil {
+			return "", err
+		}
+		converted[i] = out
+	}
+	return goSyntax(form.op, converted...), nil
+}
+
+func goSyntax(op arm64asm.Op, args ...arm64asm.Arg) string {
+	var inst arm64asm.Inst
+	inst.Op = op
+	for i, arg := range args {
+		inst.Args[i] = arg
+	}
+	return arm64asm.GoSyntax(inst, 0, nil, nil)
+}
+
+func asmArg(arg string) (arm64asm.Arg, error) {
+	arg = strings.TrimSpace(arg)
+	if strings.HasPrefix(arg, "#") {
+		value := strings.TrimPrefix(arg, "#")
+		n, err := strconv.ParseInt(value, 0, 64)
+		if err == nil {
+			return arm64asm.Imm64{Imm: uint64(n), Decimal: true}, nil
+		}
+		u, err := strconv.ParseUint(value, 0, 64)
+		if err != nil {
+			return nil, err
+		}
+		return arm64asm.Imm64{Imm: u, Decimal: true}, nil
+	}
+	if cond, ok := arm64Conds[strings.ToLower(arg)]; ok {
+		return cond, nil
+	}
+	if reg, err := asmRegister(arg); err == nil {
+		return reg, nil
+	}
+	return asmVectorRegister(arg)
 }
 
 func mnFor(form *spec, dst string) string {

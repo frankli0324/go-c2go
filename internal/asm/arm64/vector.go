@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"golang.org/x/arch/arm64/arm64asm"
 )
 
 func floatRegister(name string) (string, error) {
-	n, _, err := parseVecReg(name, "qdv")
+	n, _, err := parseVecReg(name, "sdq")
 	if err != nil {
 		return "", err
 	}
@@ -39,10 +41,32 @@ func parseVecReg(arg, prefixes string) (int, string, error) {
 		end++
 	}
 	n, err := strconv.Atoi(arg[1:end])
-	if err != nil || n < 0 || n > 31 {
+	if err != nil || n > 31 {
 		return 0, "", fmt.Errorf("unsupported arm64 vector register %q", arg)
 	}
 	return n, strings.ToUpper(strings.TrimPrefix(arg[end:], ".")), nil
+}
+
+func asmVectorRegister(arg string) (arm64asm.Reg, error) {
+	n, _, err := parseVecReg(arg, "bhsdqv")
+	if err != nil {
+		return 0, err
+	}
+	switch strings.ToLower(strings.TrimSpace(arg))[0] {
+	case 'b':
+		return arm64asm.B0 + arm64asm.Reg(n), nil
+	case 'h':
+		return arm64asm.H0 + arm64asm.Reg(n), nil
+	case 's':
+		return arm64asm.S0 + arm64asm.Reg(n), nil
+	case 'd':
+		return arm64asm.D0 + arm64asm.Reg(n), nil
+	case 'q':
+		return arm64asm.Q0 + arm64asm.Reg(n), nil
+	case 'v':
+		return arm64asm.V0 + arm64asm.Reg(n), nil
+	}
+	return 0, fmt.Errorf("unsupported arm64 vector register %q", arg)
 }
 
 func isVectorOp(op string, args []string) bool {
@@ -103,8 +127,8 @@ func vectorMove(op string, args []string) (string, error) {
 		return "", fmt.Errorf("unsupported arm64 vector move")
 	}
 	lane := ""
-	if suffix, ok := strings.CutPrefix(strings.ToLower(op), "mov."); ok {
-		lane = normalizeLane(suffix)
+	if lower := strings.ToLower(op); strings.HasPrefix(lower, "mov.") {
+		lane = normalizeLane(strings.TrimPrefix(lower, "mov."))
 	}
 	if isVectorArg(args[0]) {
 		src, err := vectorMoveOperand(args[1], args[0], lane)
@@ -131,13 +155,11 @@ func isVectorArg(arg string) bool {
 
 func vectorMoveOperand(arg, peer, lane string) (string, error) {
 	arg = strings.TrimSpace(arg)
-	if strings.HasPrefix(strings.ToLower(arg), "x") || strings.HasPrefix(strings.ToLower(arg), "w") {
+	lower := strings.ToLower(arg)
+	switch {
+	case strings.HasPrefix(lower, "x") || strings.HasPrefix(lower, "w"):
 		return operand(arg)
-	}
-	if strings.HasPrefix(strings.ToLower(arg), "q") || strings.HasPrefix(strings.ToLower(arg), "d") {
-		return vectorElement(arg), nil
-	}
-	if strings.Contains(arg, "[") {
+	case strings.HasPrefix(lower, "q") || strings.HasPrefix(lower, "d") || strings.Contains(arg, "["):
 		return vectorElement(arg), nil
 	}
 	_, parsedLane, err := parseVecReg(arg, "v")
@@ -146,12 +168,8 @@ func vectorMoveOperand(arg, peer, lane string) (string, error) {
 	}
 	if parsedLane != "" {
 		lane = parsedLane
-	}
-	if lane == "" {
-		_, peerLane, peerErr := parseVecReg(peer, "v")
-		if peerErr == nil {
-			lane = peerLane
-		}
+	} else if lane == "" {
+		_, lane, _ = parseVecReg(peer, "v")
 	}
 	return vectorRegisterLane(arg, lane)
 }

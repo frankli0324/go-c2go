@@ -44,7 +44,6 @@ func (t *ATT) TranslateInstruction(indent, line string) (string, bool) {
 	spec := specFor(op)
 	mnemonic, converted, err := attHandlers[spec.typ](opContext{
 		op:      op,
-		args:    args,
 		spec:    spec,
 		ops:     args,
 		convert: convertATTOperand,
@@ -55,35 +54,36 @@ func (t *ATT) TranslateInstruction(indent, line string) (string, bool) {
 	return indent + asmutil.JoinInstruction(mnemonic, converted), false
 }
 
-var attHandlers = map[opType]opHandler{
-	opFixed:            attFixedHandler,
-	opCall:             targetBranchHandler,
-	opJump:             targetBranchHandler,
-	opCondBranch:       targetBranchHandler,
-	opCondBranchSuffix: targetBranchHandler,
-	opReturn:           returnHandler,
-	opSIMDExact:        attSIMDExactHandler,
-	opSIMDSuffix:       attSIMDSuffixHandler,
-	opSized:            attSizedHandler,
-	opDoubleShift:      attDoubleShiftHandler,
-	opCMOV:             attCMOVHandler,
-	opSETCC:            setCCHandler,
+var attHandlers = [...]opHandler{
+	opExact:       attExactHandler,
+	opTarget:      targetHandler,
+	opReturn:      returnHandler,
+	opSized:       attSizedHandler,
+	opDoubleShift: attDoubleShiftHandler,
+	opCMOV:        attCMOVHandler,
+	opSETCC:       setCCHandler,
+	opAVX3:        attExactHandler,
 }
 
-func attFixedHandler(ctx opContext) (string, []string, error) {
+func attExactHandler(ctx opContext) (string, []string, error) {
 	ops, err := convertOperands(ctx)
-	return ctx.spec.mn, reorderATTOperands(ctx.op, ops), err
+	if err != nil {
+		return "", nil, err
+	}
+	for i, arg := range ctx.ops {
+		if converted, ok, err := convertATTMemoryOperand(strings.TrimSpace(arg)); err != nil {
+			return "", nil, err
+		} else if ok && converted == ops[i] {
+			ops[i] = strings.TrimPrefix(ops[i], "$")
+		}
+	}
+	return ctx.spec.mn, reorderATTOperands(ctx.op, ops), nil
 }
 
 func attSizedHandler(ctx opContext) (string, []string, error) {
 	if len(ctx.op) > 1 && strings.ContainsRune("bwlq", rune(ctx.op[len(ctx.op)-1])) {
 		ops, err := convertOperands(ctx)
-		suffix := ctx.op[len(ctx.op)-1:]
-		mnemonic := strings.ToUpper(ctx.op)
-		if ctx.op[:len(ctx.op)-1] == "imul" && len(ctx.ops) == 3 {
-			mnemonic = "IMUL3" + strings.ToUpper(suffix)
-		}
-		return mnemonic, reorderATTOperands(ctx.op, ops), err
+		return strings.ToUpper(ctx.op), reorderATTOperands(ctx.op, ops), err
 	}
 	return "", nil, fmt.Errorf("unsupported mnemonic %q", ctx.op)
 }
@@ -102,40 +102,10 @@ func attDoubleShiftHandler(ctx opContext) (string, []string, error) {
 	}
 	mnemonic := ctx.spec.mn
 	if mnemonic == "" {
-		suffix := ""
-		if reg := strings.TrimPrefix(ctx.args[2], "%"); reg != ctx.args[2] {
-			suffix, _ = intelRegWidth(reg)
-		}
-		if suffix == "" || suffix == "B" {
-			return "", nil, fmt.Errorf("cannot infer width for %q", ctx.op)
-		}
-		mnemonic = doubleShiftMnemonic(ctx.op, suffix)
+		return "", nil, fmt.Errorf("unsupported mnemonic %q", ctx.op)
 	}
 	ops, err := convertOperands(ctx)
 	return mnemonic, ops, err
-}
-
-func attSIMDExactHandler(ctx opContext) (string, []string, error) {
-	ops, err := convertATTSIMDOperands(ctx)
-	return ctx.spec.mn, reorderATTOperands(ctx.op, ops), err
-}
-
-func attSIMDSuffixHandler(ctx opContext) (string, []string, error) {
-	ops, err := convertATTSIMDOperands(ctx)
-	return strings.ToUpper(ctx.op), reorderATTOperands(ctx.op, ops), err
-}
-
-func convertATTSIMDOperands(ctx opContext) ([]string, error) {
-	out, err := convertSIMDOperands(ctx)
-	if err != nil {
-		return out, err
-	}
-	for i, arg := range ctx.ops {
-		if strings.Contains(strings.ToLower(arg), "(%rip)") {
-			out[i] = strings.TrimPrefix(out[i], "$")
-		}
-	}
-	return out, nil
 }
 
 func convertATTOperand(op, arg string) (string, error) {
@@ -151,22 +121,26 @@ func convertATTOperand(op, arg string) (string, error) {
 	}
 	if strings.HasPrefix(arg, "$") {
 		value := strings.TrimPrefix(arg, "$")
-		if strings.EqualFold(op, "leaq") && !asmutil.IsNumeric(value) {
-			return strings.TrimPrefix(plan9Immediate(value), "$"), nil
-		}
 		return plan9Immediate(value), nil
 	}
-	if strings.Contains(arg, "(") && strings.HasSuffix(arg, ")") {
-		converted, err := convertATTMemory(arg)
+	if converted, ok, err := convertATTMemoryOperand(arg); ok || err != nil {
 		if err != nil {
 			return "", err
 		}
-		if strings.EqualFold(op, "leaq") && strings.HasPrefix(converted, "$") {
+		if strings.HasPrefix(op, "lea") && strings.HasPrefix(converted, "$") {
 			converted = strings.TrimPrefix(converted, "$")
 		}
 		return converted, nil
 	}
-	return arg, nil
+	return "", fmt.Errorf("unsupported operand %q", arg)
+}
+
+func convertATTMemoryOperand(arg string) (string, bool, error) {
+	if !strings.Contains(arg, "(") || !strings.HasSuffix(arg, ")") {
+		return "", false, nil
+	}
+	converted, err := convertATTMemory(arg)
+	return converted, true, err
 }
 
 func convertATTMemory(arg string) (string, error) {
@@ -181,32 +155,10 @@ func convertATTMemory(arg string) (string, error) {
 	if strings.EqualFold(base, "rip") {
 		return plan9Immediate(disp), nil
 	}
-	baseReg := ""
-	if base != "" {
-		reg, err := plan9Register(base)
-		if err != nil {
-			return "", err
-		}
-		baseReg = reg
-	}
-	indexText := ""
-	if index != "" {
-		reg, err := plan9Register(index)
-		if err != nil {
-			return "", err
-		}
-		if scale == "" {
-			scale = "1"
-		}
-		indexText = "(" + reg + "*" + scale + ")"
-	}
-	if baseReg == "" {
-		if indexText != "" {
-			return disp + indexText, nil
-		}
+	if base == "" && index == "" {
 		return plan9Immediate(disp), nil
 	}
-	return disp + "(" + baseReg + ")" + indexText, nil
+	return formatMemory(base, index, scale, disp)
 }
 
 func reorderATTOperands(op string, operands []string) []string {

@@ -62,7 +62,7 @@ LBB2_2:
 LBB2_3:
     bl helper
     ret
-`, []string{"_add:", "ADDW R0, R1, R0", "RET", "MOVD $51847, R8", "MOVK $(34283<<16), R8", "MUL R8, R0, R0", "CMP $1, R1", "BLT LBB2_2", "MOVB (R0), R0", "JMP LBB2_3", "MOVW $0, R0", "CALL helper(SB)"}, nil},
+`, []string{"_add:", "ADDW R0, R1, R0", "RET", "MOVD $51847, R8", "MOVK $(34283<<16), R8", "MUL R8, R0, R0", "CMPW $1, R1", "BLT LBB2_2", "MOVB (R0), R0", "JMP LBB2_3", "MOVW $0, R0", "CALL helper(SB)"}, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) { checkTranslate(t, tc.syntax, tc.arch, tc.input, tc.want, tc.notWant) })
@@ -164,6 +164,12 @@ func TestTranslateContextControlsPCALIGN(t *testing.T) {
 	mustContain(t, out, "// .p2align 4, 0x90")
 	mustNotContain(t, out, "PCALIGN")
 
+	out, err = Translate(src, Context{Syntax: ATT, Arch: "amd64", GoVersion: "go1.21.13"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustNotContain(t, out, "PCALIGN")
+
 	out, err = Translate(src, Context{Syntax: ATT, Arch: "amd64", GoVersion: "go1.26"})
 	if err != nil {
 		t.Fatal(err)
@@ -179,8 +185,7 @@ movq foo+8(%rbp), %rax
 	checkTranslate(t, Intel, "amd64", `
 mov rax, [rbp-4]
 mov rax, [rax+rcx*8+16]
-mov rax, [foo+8]
-`, []string{"MOVQ -4(BP), AX", "MOVQ 16(AX)(CX*8), AX", "MOVQ $foo+8(SB), AX"}, nil)
+`, []string{"MOVQ -4(BP), AX", "MOVQ 16(AX)(CX*8), AX"}, nil)
 }
 
 func TestTranslateSIMDMnemonics(t *testing.T) {

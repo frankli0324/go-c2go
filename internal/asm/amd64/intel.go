@@ -37,49 +37,33 @@ func (t *Intel) TranslateInstruction(indent, line string) (string, bool) {
 	if op == "cdqe" {
 		return indent + "MOVLQSX AX, AX", false
 	}
-	ptrs := make([]string, len(args))
-	ops := make([]string, len(args))
-	for i, arg := range args {
-		operand, ptr := stripIntelPtr(arg)
-		ptrs[i] = ptr
-		ops[i] = operand
-	}
 	spec := specFor(op)
-	mnemonic, converted, err := intelHandlers[spec.typ](opContext{
+	ctx := opContext{
 		op:      op,
-		args:    args,
-		ptrs:    ptrs,
 		spec:    spec,
-		ops:     ops,
+		ops:     args,
 		convert: convertIntelOperand,
-	})
+	}
+	mnemonic, converted, err := intelHandlers[spec.typ](ctx)
 	if err != nil {
 		return indent + "// UNSUPPORTED: " + line, true
 	}
 	return indent + asmutil.JoinInstruction(mnemonic, converted), false
 }
 
-var intelHandlers = map[opType]opHandler{
-	opFixed:            intelFixedHandler,
-	opCall:             targetBranchHandler,
-	opJump:             targetBranchHandler,
-	opCondBranch:       targetBranchHandler,
-	opCondBranchSuffix: targetBranchHandler,
-	opReturn:           returnHandler,
-	opSIMDExact:        intelSIMDExactHandler,
-	opSIMDSuffix:       intelSIMDSuffixHandler,
-	opSized:            intelSizedHandler,
-	opDoubleShift:      intelDoubleShiftHandler,
-	opCMOV:             intelCMOVHandler,
-	opSETCC:            setCCHandler,
+var intelHandlers = [...]opHandler{
+	opExact:       intelExactHandler,
+	opTarget:      targetHandler,
+	opReturn:      returnHandler,
+	opSized:       intelSizedHandler,
+	opDoubleShift: intelDoubleShiftHandler,
+	opCMOV:        intelCMOVHandler,
+	opSETCC:       setCCHandler,
+	opAVX3:        intelAVX3Handler,
 }
 
-func intelFixedHandler(ctx opContext) (string, []string, error) {
-	ops, err := convertOperands(ctx)
-	if err != nil {
-		return "", nil, err
-	}
-	ops, err = reorderIntelOperands(ctx.op, ops)
+func intelExactHandler(ctx opContext) (string, []string, error) {
+	ops, err := convertIntelOperands(ctx)
 	return ctx.spec.mn, ops, err
 }
 
@@ -88,16 +72,11 @@ func intelSizedHandler(ctx opContext) (string, []string, error) {
 	if suffix == "" {
 		return "", nil, fmt.Errorf("cannot infer width for %q", ctx.op)
 	}
-	ops, err := convertOperands(ctx)
+	ops, err := convertIntelOperands(ctx)
 	if err != nil {
 		return "", nil, err
 	}
-	ops, err = reorderIntelOperands(ctx.op, ops)
-	mnemonic := strings.ToUpper(ctx.op) + suffix
-	if ctx.op == "imul" && len(ctx.ops) == 3 {
-		mnemonic = "IMUL3" + suffix
-	}
-	return mnemonic, ops, err
+	return strings.ToUpper(ctx.op) + suffix, ops, err
 }
 
 func intelCMOVHandler(ctx opContext) (string, []string, error) {
@@ -106,11 +85,7 @@ func intelCMOVHandler(ctx opContext) (string, []string, error) {
 		return "", nil, fmt.Errorf("cannot infer width for %q", ctx.op)
 	}
 	if mnemonic, ok := cmovMnemonic(ctx.op + strings.ToLower(suffix)); ok {
-		ops, err := convertOperands(ctx)
-		if err != nil {
-			return "", nil, err
-		}
-		ops, err = reorderIntelOperands(ctx.op, ops)
+		ops, err := convertIntelOperands(ctx)
 		return mnemonic, ops, err
 	}
 	return "", nil, fmt.Errorf("unsupported cmov mnemonic %q", ctx.op)
@@ -135,62 +110,59 @@ func intelDoubleShiftHandler(ctx opContext) (string, []string, error) {
 	return mnemonic, []string{ops[2], ops[1], ops[0]}, nil
 }
 
-func intelSIMDExactHandler(ctx opContext) (string, []string, error) {
-	ops, err := convertSIMDOperands(ctx)
+func intelAVX3Handler(ctx opContext) (string, []string, error) {
+	if len(ctx.ops) != 3 {
+		return "", nil, fmt.Errorf("%s takes three operands", ctx.op)
+	}
+	ops, err := convertOperands(ctx)
 	if err != nil {
 		return "", nil, err
 	}
-	ops, err = reorderIntelOperands(ctx.op, ops)
-	return ctx.spec.mn, ops, err
+	return ctx.spec.mn, []string{ops[1], ops[2], ops[0]}, nil
 }
 
-func intelSIMDSuffixHandler(ctx opContext) (string, []string, error) {
-	ops, err := convertSIMDOperands(ctx)
+func convertIntelOperands(ctx opContext) ([]string, error) {
+	ops, err := convertOperands(ctx)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
-	ops, err = reorderIntelOperands(ctx.op, ops)
-	return strings.ToUpper(ctx.op), ops, err
+	return reorderIntelOperands(ctx.op, ops)
 }
 
 func intelSuffix(ctx opContext) string {
-	for _, ptr := range ctx.ptrs {
-		switch ptr {
-		case "byte ptr":
-			return "B"
-		case "word ptr":
-			return "W"
-		case "dword ptr":
-			return "L"
-		case "qword ptr":
-			return "Q"
+	regWidth := ""
+	for _, arg := range ctx.ops {
+		arg, width := stripIntelPtr(arg)
+		if width != "" {
+			return width
+		}
+		if regWidth == "" {
+			regWidth, _ = intelRegWidth(arg)
 		}
 	}
-	for _, arg := range ctx.args {
-		if reg, ok := intelRegWidth(arg); ok {
-			return reg
-		}
+	if regWidth != "" {
+		return regWidth
 	}
-	switch ctx.op {
-	case "push", "pop":
-		return "Q"
-	default:
-		return ""
-	}
+	return ""
 }
 
 func stripIntelPtr(arg string) (string, string) {
 	lower := strings.ToLower(strings.TrimSpace(arg))
-	for _, kind := range []string{"byte ptr", "word ptr", "dword ptr", "qword ptr"} {
-		if strings.HasPrefix(lower, kind) {
-			return strings.TrimSpace(arg[len(kind):]), kind
+	for _, ptr := range []struct{ name, width string }{
+		{"byte ptr", "B"},
+		{"word ptr", "W"},
+		{"dword ptr", "L"},
+		{"qword ptr", "Q"},
+	} {
+		if strings.HasPrefix(lower, ptr.name) {
+			return strings.TrimSpace(arg[len(ptr.name):]), ptr.width
 		}
 	}
 	return strings.TrimSpace(arg), ""
 }
 
 func convertIntelOperand(op, arg string) (string, error) {
-	arg = strings.TrimSpace(arg)
+	arg, _ = stripIntelPtr(arg)
 	if arg == "" {
 		return "", fmt.Errorf("empty operand")
 	}
@@ -206,7 +178,7 @@ func convertIntelOperand(op, arg string) (string, error) {
 	if isIntelImmediate(arg) {
 		return plan9Immediate(arg), nil
 	}
-	return plan9Immediate(arg), nil
+	return "", fmt.Errorf("unsupported operand %q", arg)
 }
 
 func reorderIntelOperands(op string, operands []string) ([]string, error) {
@@ -215,16 +187,6 @@ func reorderIntelOperands(op string, operands []string) ([]string, error) {
 	}
 	if len(operands) == 2 {
 		return []string{operands[1], operands[0]}, nil
-	}
-	lower := strings.ToLower(op)
-	if len(operands) == 3 && lower == "imul" {
-		return []string{operands[2], operands[1], operands[0]}, nil
-	}
-	if len(operands) == 3 && strings.HasPrefix(lower, "v") {
-		if !isWhitelistedAVXThreeOp(op) {
-			return nil, fmt.Errorf("unknown AVX three-operand instruction %q", op)
-		}
-		return []string{operands[1], operands[2], operands[0]}, nil
 	}
 	return operands, nil
 }
@@ -239,18 +201,17 @@ func convertIntelMemory(arg string) (string, error) {
 	for _, part := range parts {
 		if strings.Contains(part, "*") {
 			pair := strings.SplitN(part, "*", 2)
-			reg, err := plan9Register(pair[0])
-			if err != nil {
+			if _, err := plan9Register(pair[0]); err != nil {
 				return "", err
 			}
-			index, scale = reg, pair[1]
+			index, scale = pair[0], pair[1]
 			continue
 		}
-		if reg, err := plan9Register(part); err == nil {
+		if _, err := plan9Register(part); err == nil {
 			if base == "" {
-				base = reg
+				base = part
 			} else if index == "" {
-				index, scale = reg, "1"
+				index, scale = part, "1"
 			} else {
 				return "", fmt.Errorf("too many registers in %q", arg)
 			}
@@ -258,17 +219,10 @@ func convertIntelMemory(arg string) (string, error) {
 		}
 		disp = appendDisp(disp, part)
 	}
-	if base == "" {
-		return plan9Immediate(disp), nil
+	if base == "" && index == "" {
+		return "", fmt.Errorf("unsupported memory operand %q", arg)
 	}
-	result := disp + "(" + base + ")"
-	if index != "" {
-		if scale == "" {
-			scale = "1"
-		}
-		result += "(" + index + "*" + scale + ")"
-	}
-	return result, nil
+	return formatMemory(base, index, scale, disp)
 }
 
 func splitExpr(s string) []string {

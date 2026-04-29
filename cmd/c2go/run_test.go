@@ -136,6 +136,49 @@ func TestGeneratedC(t *testing.T) {
 	goTest(t, dir, "linux", "386", "-c", "./...")
 }
 
+func TestRunARM64RealCMemoryForms(t *testing.T) {
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not available")
+	}
+	if !supportsTarget(runtime.GOOS, asmconv.ArchARM64) {
+		t.Skipf("clang arm64 target is not configured for %s", runtime.GOOS)
+	}
+	dir := t.TempDir()
+	writeAll(t, dir, map[string]string{
+		"go.mod":      "module sample\n\ngo 1.26\n",
+		"generate.go": "package sample\n",
+		"sample.c": `//go:build ignore
+#include <stddef.h>
+#include <stdint.h>
+
+//go:c2go
+int signed_first(const unsigned char *buf, size_t buf_len) {
+	if (buf_len == 0) return 0;
+	return (int)(int8_t)buf[0];
+}
+
+//go:c2go
+unsigned long long memmix(const unsigned char *buf, size_t buf_len) {
+	if (buf_len < 12) return 0;
+	const volatile unsigned char *p = buf;
+	int64_t s8 = (int8_t)p[0];
+	uint32_t u32 = *(const volatile uint32_t *)(buf + 4);
+	uint64_t sum = (uint64_t)s8 + (uint64_t)u32;
+	for (size_t i = 8; i < buf_len; i++) sum += p[i];
+	return sum;
+}
+`,
+	})
+	inDir(t, dir, func() {
+		runOK(t, "-cc", "clang", "-syntax", "auto", "-arch", asmconv.ArchARM64, "-c", "sample.c")
+	})
+	asm := read(t, filepath.Join(dir, "sample_c2go_"+asmconv.ArchARM64+".s"))
+	mustContain(t, asm, "TEXT ·Memmix(SB)", "TEXT ·SignedFirst(SB)", "MOVB (R0), R0", "MOVWU")
+	mustContainAny(t, asm, ".P", "ADD $1")
+	mustNotContain(t, asm, "// UNSUPPORTED")
+	goTest(t, dir, runtime.GOOS, asmconv.ArchARM64, "-c", "./...")
+}
+
 func TestRunPackageModeMergesGeneratedArchTags(t *testing.T) {
 	goos, _ := requireHostCompilerTarget(t)
 	dir := t.TempDir()

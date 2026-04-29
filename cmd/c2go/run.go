@@ -178,8 +178,8 @@ func genericOutputPath(goPath string) string {
 func bindingArches(asmPath, arch string) []string {
 	seen := map[string]bool{arch: true}
 	dir, name := filepath.Dir(asmPath), filepath.Base(asmPath)
-	prefix, ok := strings.CutSuffix(name, arch+".s")
-	if ok {
+	if strings.HasSuffix(name, arch+".s") {
+		prefix := strings.TrimSuffix(name, arch+".s")
 		if matches, err := filepath.Glob(filepath.Join(dir, prefix+"*.s")); err == nil {
 			for _, match := range matches {
 				base := filepath.Base(match)

@@ -6,127 +6,96 @@ import (
 	"strings"
 
 	"github.com/frankli0324/go-c2go/internal/asm/asmutil"
+	"golang.org/x/arch/arm64/arm64asm"
 )
+
+var exactMemMnemonics = map[string]string{
+	"ldrsb": "MOVB", "ldursb": "MOVB",
+	"ldrsh": "MOVH", "ldursh": "MOVH",
+	"ldrsw": "MOVW", "ldursw": "MOVW",
+	"ldrb": "MOVBU", "ldurb": "MOVBU",
+	"ldrh": "MOVHU", "ldurh": "MOVHU",
+	"strb": "MOVB", "sturb": "MOVB",
+	"strh": "MOVH", "sturh": "MOVH",
+}
 
 func (t *Translator) load(op string, args []string) (string, error) {
 	if len(args) != 2 && len(args) != 3 {
 		return "", fmt.Errorf("unsupported arm64 load")
 	}
-	if len(args) == 3 {
-		base := strings.TrimSuffix(strings.TrimSpace(args[1]), "]")
-		mem, err := t.memory(base + ", " + args[2] + "]")
-		if err != nil {
-			return "", err
-		}
-		dst, err := operand(args[0])
-		if err != nil {
-			return "", err
-		}
-		return loadMnemonic(op, args[0]) + ".P " + mem + ", " + dst, nil
-	}
-	if isFloatReg(args[0]) {
-		dst, err := floatRegister(args[0])
-		if err != nil {
-			return "", err
-		}
-		mem, err := t.memory(args[1])
-		if err != nil {
-			return "", err
-		}
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(args[0])), "q") {
-			return "FMOVQ " + mem + ", " + dst, nil
-		}
-		return "FMOVD " + mem + ", " + dst, nil
-	}
-	dst, err := operand(args[0])
+	mnemonic, err := memMnemonic(op, args[0])
 	if err != nil {
 		return "", err
 	}
-	mnemonic := loadMnemonic(op, args[0])
-	memArg := strings.TrimSpace(args[1])
-	if strings.HasSuffix(memArg, "]!") {
-		memArg = strings.TrimSuffix(memArg, "!")
-		mnemonic += ".W"
+	out, err := t.memText(true, mnemonic, args[0], args[1:])
+	if err == nil {
+		t.clear(args[0])
 	}
-	mem, err := t.memory(memArg)
-	if err != nil {
-		return "", err
-	}
-	t.clear(args[0])
-	return mnemonic + " " + mem + ", " + dst, nil
+	return out, err
 }
 
 func (t *Translator) store(op string, args []string) (string, error) {
 	if len(args) != 2 {
 		return "", fmt.Errorf("unsupported arm64 store")
 	}
-	if isFloatReg(args[0]) {
-		src, err := floatRegister(args[0])
-		if err != nil {
-			return "", err
-		}
-		memArg := strings.TrimSpace(args[1])
-		mnemonic := "FMOVD"
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(args[0])), "q") {
-			mnemonic = "FMOVQ"
-		}
-		if strings.HasSuffix(memArg, "]!") {
-			memArg = strings.TrimSuffix(memArg, "!")
-			mnemonic += ".W"
-		}
-		mem, err := t.memory(memArg)
-		if err != nil {
-			return "", err
-		}
-		return mnemonic + " " + src + ", " + mem, nil
-	}
-	src, err := operand(args[0])
+	mnemonic, err := memMnemonic(op, args[0])
 	if err != nil {
 		return "", err
 	}
-	mnemonic := storeMnemonic(op, args[0])
-	memArg := strings.TrimSpace(args[1])
-	if strings.HasSuffix(memArg, "]!") {
-		memArg = strings.TrimSuffix(memArg, "!")
-		mnemonic += ".W"
-	}
-	mem, err := t.memory(memArg)
+	return t.memText(false, mnemonic, args[0], args[1:])
+}
+
+func (t *Translator) memText(load bool, mnemonic, regArg string, memArgs []string) (string, error) {
+	mem, suffix, err := t.memorySuffix(memArgs)
 	if err != nil {
 		return "", err
 	}
-	return mnemonic + " " + src + ", " + mem, nil
+	mnemonic += suffix
+	reg, err := operand(regArg)
+	if isFloatReg(regArg) {
+		reg, err = floatRegister(regArg)
+	}
+	if err != nil {
+		return "", err
+	}
+	if load {
+		return mnemonic + " " + mem + ", " + reg, nil
+	}
+	return mnemonic + " " + reg + ", " + mem, nil
 }
 
-func loadMnemonic(op, dst string) string {
-	switch {
-	case strings.Contains(op, "rsb"):
-		return "MOVB"
-	case strings.Contains(op, "rsh"):
-		return "MOVH"
-	case strings.Contains(op, "rsw"):
-		return "MOVW"
-	case strings.HasSuffix(op, "b"):
-		return "MOVBU"
-	case strings.HasSuffix(op, "h"):
-		return "MOVHU"
-	case strings.HasPrefix(strings.ToLower(strings.TrimSpace(dst)), "w"):
-		return "MOVWU"
-	default:
-		return "MOVD"
+func memMnemonic(op, reg string) (string, error) {
+	if mn, ok := exactMemMnemonics[op]; ok {
+		return mn, nil
 	}
-}
-
-func storeMnemonic(op, src string) string {
-	switch {
-	case strings.HasSuffix(op, "b"):
-		return "MOVB"
-	case strings.HasSuffix(op, "h"):
-		return "MOVH"
-	case strings.HasPrefix(strings.ToLower(strings.TrimSpace(src)), "w"):
-		return "MOVW"
-	default:
-		return "MOVD"
+	load := op == "ldr" || op == "ldur"
+	if !load && op != "str" && op != "stur" {
+		return "", fmt.Errorf("unsupported arm64 memory op %q %q", op, reg)
 	}
+	reg = strings.TrimSpace(reg)
+	lowerReg := strings.ToLower(reg)
+	if _, err := register(reg); err == nil {
+		switch {
+		case strings.HasPrefix(lowerReg, "x"):
+			return "MOVD", nil
+		case load && strings.HasPrefix(lowerReg, "w"):
+			return "MOVWU", nil
+		case strings.HasPrefix(lowerReg, "w"):
+			return "MOVW", nil
+		}
+	}
+	if _, err := floatRegister(reg); err != nil {
+		return "", fmt.Errorf("unsupported arm64 memory register %q", reg)
+	}
+	switch lowerReg[0] {
+	case 's':
+		return "FMOVS", nil
+	case 'd':
+		return "FMOVD", nil
+	case 'q':
+		return "FMOVQ", nil
+	}
+	return "", fmt.Errorf("unsupported arm64 memory register %q", reg)
 }
 
 func operand(arg string) (string, error) {
@@ -153,14 +122,45 @@ func register(name string) (string, error) {
 	case "xzr", "wzr":
 		return "ZR", nil
 	}
-	if len(name) < 2 || (name[0] != 'x' && name[0] != 'w') {
-		return "", fmt.Errorf("unsupported arm64 register %q", name)
+	if n, ok := regNumber(name); ok {
+		return fmt.Sprintf("R%d", n), nil
+	}
+	return "", fmt.Errorf("unsupported arm64 register %q", name)
+}
+
+func asmRegister(name string) (arm64asm.Arg, error) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	switch name {
+	case "sp":
+		return arm64asm.RegSP(arm64asm.SP), nil
+	case "xzr":
+		return arm64asm.XZR, nil
+	case "wzr":
+		return arm64asm.WZR, nil
+	}
+	if n, ok := regNumber(name); ok {
+		if name[0] == 'w' {
+			return arm64asm.W0 + arm64asm.Reg(n), nil
+		}
+		return arm64asm.X0 + arm64asm.Reg(n), nil
+	}
+	return nil, fmt.Errorf("unsupported arm64 register %q", name)
+}
+
+func reservedRegNumber(name string) (int, bool) {
+	if n, ok := regNumber(name); ok && reservedRegister(n) {
+		return n, true
+	}
+	return 0, false
+}
+
+func regNumber(name string) (int, bool) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if len(name) < 2 || name[0] != 'x' && name[0] != 'w' {
+		return 0, false
 	}
 	n, err := strconv.Atoi(name[1:])
-	if err != nil || n < 0 || n > 30 {
-		return "", fmt.Errorf("unsupported arm64 register %q", name)
-	}
-	return fmt.Sprintf("R%d", n), nil
+	return n, err == nil && n >= 0 && n <= 30
 }
 
 func reservedRegister(n int) bool {
@@ -175,46 +175,21 @@ func reservedRegister(n int) bool {
 		return true
 	case 29: // R29 is FP in Go ARM64 assembly.
 		return true
+	default:
+		return false
 	}
-	return false
-}
-
-func reservedRegNumber(name string) (int, bool) {
-	name = strings.ToLower(strings.TrimSpace(name))
-	if len(name) < 2 || (name[0] != 'x' && name[0] != 'w') {
-		return 0, false
-	}
-	n, err := strconv.Atoi(name[1:])
-	if err != nil || !reservedRegister(n) {
-		return 0, false
-	}
-	return n, true
 }
 
 func pairReservedRegister(name string) (string, error) {
-	name = strings.ToLower(strings.TrimSpace(name))
-	switch name {
-	case "x26", "w26": // Allow clang's R26 stack save-restore pair to translate before inline filtering.
-		return "R26", nil
-	case "x27", "w27": // Allow clang's R27 stack save-restore pair to translate before inline filtering.
-		return "R27", nil
-	case "x28", "w28": // Allow clang's R28 stack save-restore pair to translate before inline filtering.
-		return "R28", nil
-	case "x29", "w29": // Allow clang's R29/R30 frame-pointer/link-register save-restore pair.
-		return "R29", nil
-	default:
-		return "", fmt.Errorf("reserved arm64 register %q", name)
+	if n, ok := regNumber(name); ok && n >= 26 && n <= 29 {
+		return fmt.Sprintf("R%d", n), nil
 	}
+	return "", fmt.Errorf("reserved arm64 register %q", name)
 }
 
-func (t *Translator) memory(arg string) (string, error) {
-	arg = strings.TrimSpace(arg)
-	if !strings.HasPrefix(arg, "[") || !strings.HasSuffix(arg, "]") {
-		return "", fmt.Errorf("unsupported arm64 memory %q", arg)
-	}
-	parts := asmutil.SplitOperands(strings.TrimSpace(arg[1 : len(arg)-1]))
+func (t *Translator) formatMemory(parts []string) (string, error) {
 	if len(parts) == 0 || len(parts) > 2 {
-		return "", fmt.Errorf("unsupported arm64 memory %q", arg)
+		return "", fmt.Errorf("unsupported arm64 memory")
 	}
 	base, err := register(parts[0])
 	if err != nil {
@@ -235,26 +210,42 @@ func (t *Translator) memory(arg string) (string, error) {
 	return strings.TrimPrefix(strings.TrimSpace(parts[1]), "#") + "(" + base + ")", nil
 }
 
-func (t *Translator) pairMemory(args []string) (string, string, error) {
-	if len(args) != 1 && len(args) != 2 {
-		return "", "", fmt.Errorf("unsupported arm64 pair memory")
+func memoryParts(arg string) ([]string, bool) {
+	arg = strings.TrimSpace(arg)
+	if strings.HasSuffix(arg, "]!") || !strings.HasPrefix(arg, "[") || !strings.HasSuffix(arg, "]") {
+		return nil, false
 	}
-	memArg := args[0]
+	return asmutil.SplitOperands(strings.TrimSpace(arg[1 : len(arg)-1])), true
+}
+
+func (t *Translator) memorySuffix(args []string) (string, string, error) {
+	if len(args) != 1 && len(args) != 2 {
+		return "", "", fmt.Errorf("unsupported arm64 memory")
+	}
 	if len(args) == 2 {
-		memArg = strings.TrimSuffix(memArg, "]") + ", " + args[1] + "]"
-		mem, err := t.memory(memArg)
+		parts, ok := memoryParts(args[0])
+		if !ok || len(parts) != 1 {
+			return "", "", fmt.Errorf("unsupported arm64 post-index memory")
+		}
+		mem, err := t.formatMemory(append(parts, args[1]))
 		return mem, ".P", err
 	}
-	if strings.HasSuffix(strings.TrimSpace(memArg), "]!") {
-		memArg = strings.TrimSuffix(strings.TrimSpace(memArg), "!")
-		mem, err := t.memory(memArg)
-		return mem, ".W", err
+
+	arg := strings.TrimSpace(args[0])
+	suffix := ""
+	if strings.HasSuffix(arg, "]!") {
+		arg = strings.TrimSuffix(arg, "!")
+		suffix = ".W"
 	}
-	mem, err := t.memory(memArg)
-	return mem, "", err
+	parts, ok := memoryParts(arg)
+	if !ok {
+		return "", "", fmt.Errorf("unsupported arm64 memory %q", args[0])
+	}
+	mem, err := t.formatMemory(parts)
+	return mem, suffix, err
 }
 
 func isFloatReg(arg string) bool {
-	arg = strings.ToLower(strings.TrimSpace(arg))
-	return strings.HasPrefix(arg, "q") || strings.HasPrefix(arg, "d")
+	_, err := floatRegister(arg)
+	return err == nil
 }

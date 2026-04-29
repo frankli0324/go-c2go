@@ -1,15 +1,31 @@
 package asm
 
 import (
-	"go/version"
+	"strconv"
+	"strings"
 )
 
 func (ctx Context) supportsPCALIGN() bool {
 	if ctx.Arch != ArchAMD64 {
 		return true
 	}
-	if !version.IsValid(ctx.GoVersion) {
+	major, minor, ok := parseGoVersion(ctx.GoVersion)
+	if !ok {
 		return true
 	}
-	return version.Compare(version.Lang(ctx.GoVersion), "go1.22") >= 0
+	return major > 1 || major == 1 && minor >= 22
+}
+
+func parseGoVersion(v string) (int, int, bool) {
+	v = strings.TrimPrefix(strings.TrimSpace(v), "go")
+	parts := strings.Split(v, ".")
+	if len(parts) < 2 {
+		return 0, 0, false
+	}
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, false
+	}
+	minor, err := strconv.Atoi(parts[1])
+	return major, minor, err == nil
 }

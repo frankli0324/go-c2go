@@ -5,7 +5,35 @@ import (
 	"strings"
 
 	"github.com/frankli0324/go-c2go/internal/asm/asmutil"
+	"golang.org/x/arch/x86/x86asm"
 )
+
+var amd64Conditions = map[string]string{}
+
+func init() {
+	add := func(branch x86asm.Op, suffix string, names ...string) {
+		for _, name := range names {
+			amd64Conditions[name] = suffix
+			opSpecs["j"+name] = opSpec{typ: opTarget, mn: branch.String()}
+		}
+	}
+	add(x86asm.JE, "EQ", "e", "z")
+	add(x86asm.JNE, "NE", "ne", "nz")
+	add(x86asm.JG, "GT", "g")
+	add(x86asm.JGE, "GE", "ge")
+	add(x86asm.JL, "LT", "l")
+	add(x86asm.JLE, "LE", "le")
+	add(x86asm.JA, "HI", "a")
+	add(x86asm.JAE, "CC", "ae", "nc")
+	add(x86asm.JB, "CS", "b", "c")
+	add(x86asm.JBE, "LS", "be")
+	add(x86asm.JO, "OS", "o")
+	add(x86asm.JNO, "OC", "no")
+	add(x86asm.JS, "MI", "s")
+	add(x86asm.JNS, "PL", "ns")
+	add(x86asm.JP, "PS", "p", "pe")
+	add(x86asm.JNP, "PC", "np", "po")
+}
 
 func convertBranchTarget(target string, addSymbol bool) (string, error) {
 	target = strings.TrimSpace(target)
@@ -22,13 +50,17 @@ func convertBranchTarget(target string, addSymbol bool) (string, error) {
 	if converted, ok := convertIndirectBranchTarget(target); ok {
 		return converted, nil
 	}
-	if indirect || asmutil.IsLocalLabel(target) || !addSymbol {
+	if indirect {
+		return "", fmt.Errorf("unsupported indirect branch target %q", target)
+	}
+	if asmutil.IsLocalLabel(target) || !addSymbol {
 		return target, nil
 	}
 	return asmutil.AddSB(target), nil
 }
 
 func convertIndirectBranchTarget(target string) (string, bool) {
+	target, _ = stripIntelPtr(target)
 	if reg, err := plan9Register(target); err == nil {
 		return reg, true
 	}
@@ -74,40 +106,8 @@ func setCCMnemonic(op string) (string, bool) {
 }
 
 func conditionSuffix(cond string) (string, bool) {
-	switch cond {
-	case "e", "z":
-		return "EQ", true
-	case "ne", "nz":
-		return "NE", true
-	case "g", "nle":
-		return "GT", true
-	case "ge", "nl":
-		return "GE", true
-	case "l", "nge":
-		return "LT", true
-	case "le", "ng":
-		return "LE", true
-	case "a", "nbe":
-		return "HI", true
-	case "ae", "nb", "nc":
-		return "CC", true
-	case "b", "c", "nae":
-		return "CS", true
-	case "be", "na":
-		return "LS", true
-	case "o":
-		return "OS", true
-	case "no":
-		return "OC", true
-	case "s":
-		return "MI", true
-	case "ns":
-		return "PL", true
-	case "p", "pe":
-		return "PS", true
-	case "np", "po":
-		return "PC", true
-	default:
-		return "", false
+	if suffix, ok := amd64Conditions[cond]; ok {
+		return suffix, true
 	}
+	return "", false
 }
