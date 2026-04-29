@@ -32,6 +32,7 @@ func init() {
 	addExact(x86asm.MOVSS)
 	addExact(x86asm.MOVUPD)
 	addExact(x86asm.MOVUPS)
+	addExact(x86asm.PSHUFD)
 	addExact(x86asm.PSHUFB)
 	addExact(x86asm.PXOR)
 	addExact(x86asm.CVTSS2SD)

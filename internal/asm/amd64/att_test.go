@@ -10,8 +10,10 @@ func TestATTRecentForms(t *testing.T) {
 leaq foo(%rip), %rax
 leal foo(%rip), %eax
 movq (rax), %rcx
+movl $global_weights+4, %eax
 shlq %rax
 shrdq $13, %rbx, %rax
+pshufd $78, %xmm0, %xmm1
 vpshufd $78, %xmm0, %xmm1
 pxor %xmm1, %xmm0
 `)
@@ -19,8 +21,10 @@ pxor %xmm1, %xmm0
 		"LEAQ foo(SB), AX",
 		"LEAL foo(SB), AX",
 		"MOVQ (AX), CX",
+		"LEAQ global_weights+4(SB), AX",
 		"SHLQ $1, AX",
 		"SHRQ $13, BX, AX",
+		"PSHUFD $78, X0, X1",
 		"VPSHUFD $78, X0, X1",
 		"PXOR X1, X0",
 	)
@@ -41,18 +45,30 @@ pop rbp
 }
 
 func TestReservedRegistersNeedSave(t *testing.T) {
-	if out, bad := new(ATT).TranslateInstruction("", "movq %r12, %rax"); !bad {
+	if out, bad := new(ATT).TranslateInstruction("movq %r12, %rax"); !bad {
 		t.Fatalf("ATT allowed unsaved reserved register: %s", out)
 	}
 	var att ATT
 	for _, line := range []string{"pushq %r12", "movq %r12, %rax", "popq %r12"} {
-		if out, bad := att.TranslateInstruction("", line); bad {
+		if out, bad := att.TranslateInstruction(line); bad {
 			t.Fatalf("ATT unsupported %q: %s", line, out)
 		}
 	}
-	if out, bad := att.TranslateInstruction("", "movq %r12, %rax"); !bad {
-		t.Fatalf("ATT allowed restored reserved register: %s", out)
+	att.ResetState()
+	if out, bad := att.TranslateInstruction("movq %r12, %rax"); !bad {
+		t.Fatalf("ATT allowed reserved register after reset: %s", out)
 	}
+}
+
+func TestSavedReservedRegisterSubregister(t *testing.T) {
+	out := translateATT(t, `
+pushq %r14
+movzbl 2(%r11,%r10), %r14d
+shll $16, %r14d
+orq %rbx, %r14
+popq %r14
+`)
+	mustContain(t, out, "MOVBLZX 2(R11)(R10*1), R14", "SHLL $16, R14", "ORQ BX, R14")
 }
 
 func TestPlan9RegisterNames(t *testing.T) {
@@ -61,6 +77,7 @@ func TestPlan9RegisterNames(t *testing.T) {
 		"ah":    "AH",
 		"sil":   "SIB",
 		"spl":   "SPB",
+		"r14d":  "R14",
 		"r8b":   "R8B",
 		"r15b":  "R15B",
 		"xmm31": "X31",
@@ -103,9 +120,25 @@ shld rax, rbx, 13
 	mustContain(t, intel, "SETGT AL", "SETLS 8(SP)", "SETLT R8B", "SHLQ $13, BX, AX")
 }
 
+func TestIMULImmediate3Operand(t *testing.T) {
+	att := translateATT(t, `
+imulq $251, %rdi, %rax
+imull $7, %ecx, %edx
+imulq %rsi, %rax
+`)
+	mustContain(t, att, "IMUL3Q $251, DI, AX", "IMUL3L $7, CX, DX", "IMULQ SI, AX")
+
+	intel := translateIntel(t, `
+imul rax, rdi, 251
+imul edx, ecx, 7
+imul rax, rsi
+`)
+	mustContain(t, intel, "IMUL3Q $251, DI, AX", "IMUL3L $7, CX, DX", "IMULQ SI, AX")
+}
+
 func TestRejectsNegatedConditionAliases(t *testing.T) {
 	for _, line := range []string{"setnge %al", "jnge Ldone", "cmovnleq %rax, %rbx"} {
-		out, bad := new(ATT).TranslateInstruction("", line)
+		out, bad := new(ATT).TranslateInstruction(line)
 		if !bad {
 			t.Fatalf("ATT TranslateInstruction(%q) = %q, false, want unsupported", line, out)
 		}
@@ -158,7 +191,7 @@ func TestRejectsELFRelocations(t *testing.T) {
 		"callq *foo@GOTPCREL(%rip)",
 		"jmpq *bar@GOTPCREL(%rip)",
 	} {
-		out, bad := new(ATT).TranslateInstruction("", line)
+		out, bad := new(ATT).TranslateInstruction(line)
 		if !bad {
 			t.Fatalf("ATT TranslateInstruction(%q) = %q, false, want unsupported", line, out)
 		}
@@ -168,7 +201,7 @@ func TestRejectsELFRelocations(t *testing.T) {
 		"call foo@PLT",
 		"mov rax, [rip+foo@GOTPCREL]",
 	} {
-		out, bad := new(Intel).TranslateInstruction("", line)
+		out, bad := new(Intel).TranslateInstruction(line)
 		if !bad {
 			t.Fatalf("Intel TranslateInstruction(%q) = %q, false, want unsupported", line, out)
 		}
@@ -181,7 +214,7 @@ func TestIntelCDQE(t *testing.T) {
 	mustContain(t, out, "MOVLQSX AX, AX")
 
 	var tr Intel
-	unsupported, bad := tr.TranslateInstruction("", "cltq")
+	unsupported, bad := tr.TranslateInstruction("cltq")
 	if !bad {
 		t.Fatalf("Intel cltq = %q, false, want unsupported", unsupported)
 	}
@@ -214,7 +247,7 @@ func translateATT(t *testing.T, src string) string {
 	var out []string
 	var tr ATT
 	for _, line := range strings.Split(strings.TrimSpace(src), "\n") {
-		converted, bad := tr.TranslateInstruction("", strings.TrimSpace(line))
+		converted, bad := tr.TranslateInstruction(strings.TrimSpace(line))
 		if bad {
 			t.Fatalf("unsupported line %q -> %s", line, converted)
 		}
@@ -229,7 +262,7 @@ func translateIntelAllowUnsupported(t *testing.T, src string) (string, int) {
 	var unsupported int
 	var tr Intel
 	for _, line := range strings.Split(strings.TrimSpace(src), "\n") {
-		converted, bad := tr.TranslateInstruction("", strings.TrimSpace(line))
+		converted, bad := tr.TranslateInstruction(strings.TrimSpace(line))
 		if bad {
 			unsupported++
 		}
@@ -243,7 +276,7 @@ func translateIntel(t *testing.T, src string) string {
 	var out []string
 	var tr Intel
 	for _, line := range strings.Split(strings.TrimSpace(src), "\n") {
-		converted, bad := tr.TranslateInstruction("", strings.TrimSpace(line))
+		converted, bad := tr.TranslateInstruction(strings.TrimSpace(line))
 		if bad {
 			t.Fatalf("unsupported line %q -> %s", line, converted)
 		}

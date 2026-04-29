@@ -24,7 +24,6 @@ func (ctx Context) translateLines(src string, v translator) (string, int) {
 }
 
 func (ctx Context) translateLine(raw string, v translator) ([]string, bool) {
-	indent := leadingWhitespace(raw)
 	body := splitComment(raw, v.CommentPrefix())
 	trimmed := strings.TrimSpace(body)
 	if trimmed == "" || strings.HasPrefix(trimmed, "//") {
@@ -34,7 +33,7 @@ func (ctx Context) translateLine(raw string, v translator) ([]string, bool) {
 	label, rest := splitLabel(trimmed)
 	var out []string
 	if label != "" {
-		out = append(out, indent+label+":")
+		out = append(out, label+":")
 		trimmed = strings.TrimSpace(rest)
 		if trimmed == "" {
 			return out, false
@@ -42,7 +41,7 @@ func (ctx Context) translateLine(raw string, v translator) ([]string, bool) {
 	}
 
 	if strings.HasPrefix(trimmed, ".") {
-		line, drop, unsupported := ctx.handlePseudo(indent, trimmed)
+		line, drop, unsupported := ctx.handlePseudo(trimmed, v)
 		if drop {
 			return out, unsupported
 		}
@@ -50,7 +49,7 @@ func (ctx Context) translateLine(raw string, v translator) ([]string, bool) {
 		return out, unsupported
 	}
 
-	line, unsupported := v.TranslateInstruction(indent, trimmed)
+	line, unsupported := v.TranslateInstruction(trimmed)
 	out = append(out, line)
 	return out, unsupported
 }
@@ -80,18 +79,21 @@ func splitLabel(line string) (label, rest string) {
 	return "", line
 }
 
-func (ctx Context) handlePseudo(indent, line string) (string, bool, bool) {
+func (ctx Context) handlePseudo(line string, v translator) (string, bool, bool) {
 	fields := strings.Fields(line)
 	if len(fields) == 0 {
 		return "", true, false
 	}
 	op := strings.ToLower(fields[0])
-	if strings.HasPrefix(op, ".cfi_") || op == ".loc" || op == ".file" || op == ".loh" || op == ".ident" || op == ".addrsig" || op == ".build_version" || op == ".subsections_via_symbols" {
+	if op == ".globl" || op == ".global" || op == ".type" && strings.Contains(line, "@function") {
+		v.ResetState()
+	}
+	if strings.HasPrefix(op, ".cfi_") || op == ".loc" || op == ".file" || op == ".loh" || op == ".ident" || op == ".addrsig" || op == ".addrsig_sym" || op == ".build_version" || op == ".subsections_via_symbols" {
 		return "", true, false
 	}
 	if op == ".p2align" {
 		if !ctx.supportsPCALIGN() {
-			return indent + "// " + line, false, false
+			return "// " + line, false, false
 		}
 		args := strings.TrimSpace(strings.TrimPrefix(line, fields[0]))
 		align, _, _ := strings.Cut(args, ",")
@@ -101,25 +103,16 @@ func (ctx Context) handlePseudo(indent, line string) (string, bool, bool) {
 		}
 		shift, err := strconv.Atoi(align)
 		if err != nil || shift < 3 || shift > 11 {
-			return indent + "// " + line, false, false
+			return "// " + line, false, false
 		}
-		return indent + "PCALIGN $" + strconv.Itoa(1<<shift), false, false
+		return "PCALIGN $" + strconv.Itoa(1<<shift), false, false
 	}
 	switch op {
 	case ".byte", ".short", ".word", ".long", ".quad", ".xword":
-		return indent + op + " " + strings.TrimSpace(strings.TrimPrefix(line, fields[0])), false, false
+		return op + " " + strings.TrimSpace(strings.TrimPrefix(line, fields[0])), false, false
 	}
 	if _, ok := pseudoComment[op]; ok {
-		return indent + "// " + line, false, false
+		return "// " + line, false, false
 	}
-	return indent + "// UNSUPPORTED: " + line, false, true
-}
-
-func leadingWhitespace(s string) string {
-	for i, r := range s {
-		if r != ' ' && r != '\t' {
-			return s[:i]
-		}
-	}
-	return s
+	return "// UNSUPPORTED: " + line, false, true
 }

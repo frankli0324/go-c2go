@@ -41,13 +41,9 @@ func (t *frameTranslator) pushPop(op, reg, line string) (string, bool) {
 		return t.frame.push(reg), true
 	}
 	if trusted {
-		t.savedRegs &^= mask
 		return "// c2go: dropped amd64 Go ABI reserved register save/restore: " + line, true
 	}
 	out, ok := t.frame.pop(reg)
-	if ok {
-		t.savedRegs &^= mask
-	}
 	return out, ok
 }
 

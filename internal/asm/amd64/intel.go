@@ -17,10 +17,15 @@ func (*Intel) CommentPrefix() string {
 	return ";"
 }
 
-func (t *Intel) TranslateInstruction(indent, line string) (string, bool) {
+func (t *Intel) ResetState() {
+	t.frame = frame{}
+	t.savedRegs = 0
+}
+
+func (t *Intel) TranslateInstruction(line string) (string, bool) {
 	fields := strings.Fields(line)
 	if len(fields) == 0 {
-		return indent, false
+		return "", false
 	}
 	op := strings.ToLower(fields[0])
 	argsText := strings.TrimSpace(strings.TrimPrefix(line, fields[0]))
@@ -28,14 +33,14 @@ func (t *Intel) TranslateInstruction(indent, line string) (string, bool) {
 	if reg, ok := pushPopReg(op, args); ok {
 		out, ok := t.pushPop(op, reg, line)
 		if ok {
-			return indent + out, false
+			return out, false
 		}
 	}
 	if reservedMask(args)&^t.savedRegs != 0 {
-		return indent + "// UNSUPPORTED: " + line, true
+		return "// UNSUPPORTED: " + line, true
 	}
 	if op == "cdqe" {
-		return indent + "MOVLQSX AX, AX", false
+		return "MOVLQSX AX, AX", false
 	}
 	spec := specFor(op)
 	ctx := opContext{
@@ -46,9 +51,9 @@ func (t *Intel) TranslateInstruction(indent, line string) (string, bool) {
 	}
 	mnemonic, converted, err := intelHandlers[spec.typ](ctx)
 	if err != nil {
-		return indent + "// UNSUPPORTED: " + line, true
+		return "// UNSUPPORTED: " + line, true
 	}
-	return indent + asmutil.JoinInstruction(mnemonic, converted), false
+	return asmutil.JoinInstruction(mnemonic, converted), false
 }
 
 var intelHandlers = [...]opHandler{
@@ -60,6 +65,8 @@ var intelHandlers = [...]opHandler{
 	opCMOV:        intelCMOVHandler,
 	opSETCC:       setCCHandler,
 	opAVX3:        intelAVX3Handler,
+	opIMUL:        intelIMULHandler,
+	opMOV:         intelSizedHandler,
 }
 
 func intelExactHandler(ctx opContext) (string, []string, error) {
@@ -77,6 +84,21 @@ func intelSizedHandler(ctx opContext) (string, []string, error) {
 		return "", nil, err
 	}
 	return strings.ToUpper(ctx.op) + suffix, ops, err
+}
+
+func intelIMULHandler(ctx opContext) (string, []string, error) {
+	suffix := intelSuffix(ctx)
+	if suffix == "" || suffix == "B" {
+		return "", nil, fmt.Errorf("cannot infer width for %q", ctx.op)
+	}
+	ops, err := convertIntelOperands(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(ops) == 3 {
+		return "IMUL3" + suffix, []string{ops[2], ops[1], ops[0]}, nil
+	}
+	return "IMUL" + suffix, ops, nil
 }
 
 func intelCMOVHandler(ctx opContext) (string, []string, error) {

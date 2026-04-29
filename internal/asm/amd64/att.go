@@ -20,10 +20,15 @@ func (*ATT) CommentPrefix() string {
 	return "#"
 }
 
-func (t *ATT) TranslateInstruction(indent, line string) (string, bool) {
+func (t *ATT) ResetState() {
+	t.frame = frame{}
+	t.savedRegs = 0
+}
+
+func (t *ATT) TranslateInstruction(line string) (string, bool) {
 	fields := strings.Fields(line)
 	if len(fields) == 0 {
-		return indent, false
+		return "", false
 	}
 	rawOp := fields[0]
 	op := strings.ToLower(rawOp)
@@ -32,14 +37,14 @@ func (t *ATT) TranslateInstruction(indent, line string) (string, bool) {
 	if reg, ok := pushPopReg(op, args); ok {
 		out, ok := t.pushPop(op, reg, line)
 		if ok {
-			return indent + out, false
+			return out, false
 		}
 	}
 	if reservedMask(args)&^t.savedRegs != 0 {
-		return indent + "// UNSUPPORTED: " + line, true
+		return "// UNSUPPORTED: " + line, true
 	}
 	if op == "cltq" {
-		return indent + "MOVLQSX AX, AX", false
+		return "MOVLQSX AX, AX", false
 	}
 	spec := specFor(op)
 	mnemonic, converted, err := attHandlers[spec.typ](opContext{
@@ -49,9 +54,9 @@ func (t *ATT) TranslateInstruction(indent, line string) (string, bool) {
 		convert: convertATTOperand,
 	})
 	if err != nil {
-		return indent + "// UNSUPPORTED: " + line, true
+		return "// UNSUPPORTED: " + line, true
 	}
-	return indent + asmutil.JoinInstruction(mnemonic, converted), false
+	return asmutil.JoinInstruction(mnemonic, converted), false
 }
 
 var attHandlers = [...]opHandler{
@@ -63,6 +68,8 @@ var attHandlers = [...]opHandler{
 	opCMOV:        attCMOVHandler,
 	opSETCC:       setCCHandler,
 	opAVX3:        attExactHandler,
+	opIMUL:        attIMULHandler,
+	opMOV:         attMOVHandler,
 }
 
 func attExactHandler(ctx opContext) (string, []string, error) {
@@ -86,6 +93,32 @@ func attSizedHandler(ctx opContext) (string, []string, error) {
 		return strings.ToUpper(ctx.op), reorderATTOperands(ctx.op, ops), err
 	}
 	return "", nil, fmt.Errorf("unsupported mnemonic %q", ctx.op)
+}
+
+func attMOVHandler(ctx opContext) (string, []string, error) {
+	ops, err := convertOperands(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	if ctx.op == "movl" && len(ops) == 2 && strings.HasPrefix(ops[0], "$") && strings.Contains(ops[0], "(SB)") {
+		return "LEAQ", []string{strings.TrimPrefix(ops[0], "$"), ops[1]}, nil
+	}
+	return strings.ToUpper(ctx.op), reorderATTOperands(ctx.op, ops), nil
+}
+
+func attIMULHandler(ctx opContext) (string, []string, error) {
+	if len(ctx.op) < 2 || !strings.ContainsRune("wlq", rune(ctx.op[len(ctx.op)-1])) {
+		return "", nil, fmt.Errorf("unsupported mnemonic %q", ctx.op)
+	}
+	ops, err := convertOperands(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	suffix := strings.ToUpper(ctx.op[len(ctx.op)-1:])
+	if len(ops) == 3 {
+		return "IMUL3" + suffix, ops, nil
+	}
+	return "IMUL" + suffix, reorderATTOperands(ctx.op, ops), nil
 }
 
 func attCMOVHandler(ctx opContext) (string, []string, error) {

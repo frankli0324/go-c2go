@@ -22,6 +22,8 @@ const (
 	opCMOV
 	opSETCC
 	opAVX3
+	opIMUL
+	opMOV
 )
 
 type opHandler func(opContext) (string, []string, error)
@@ -34,6 +36,16 @@ var opSpecs = map[string]opSpec{
 
 	"jmp":  {typ: opTarget, mn: "JMP", addSymbol: true},
 	"jmpq": {typ: opTarget, mn: "JMP", addSymbol: true},
+
+	"imul":  {typ: opIMUL},
+	"imull": {typ: opIMUL},
+	"imulq": {typ: opIMUL},
+	"imulw": {typ: opIMUL},
+
+	"movb": {typ: opMOV},
+	"movl": {typ: opMOV},
+	"movq": {typ: opMOV},
+	"movw": {typ: opMOV},
 
 	"movabsq": {typ: opExact, mn: "MOVQ"},
 	"movsbl":  {typ: opExact, mn: "MOVBLSX"},

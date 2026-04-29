@@ -16,20 +16,25 @@ func (*Translator) CommentPrefix() string {
 	return ";"
 }
 
-func (t *Translator) TranslateInstruction(indent, line string) (string, bool) {
+func (t *Translator) ResetState() {
+	t.fullAddr = make(map[string]string)
+	t.stack = nil
+}
+
+func (t *Translator) TranslateInstruction(line string) (string, bool) {
 	fields := strings.Fields(line)
 	if len(fields) == 0 {
-		return indent, false
+		return "", false
 	}
 	op := strings.ToLower(fields[0])
 	args := asmutil.SplitOperands(strings.TrimSpace(strings.TrimPrefix(line, fields[0])))
 	stackKey, stackMask, stackPair := stackPair(op, args)
 	if !stackPair && reservedMask(args)&^t.savedMask() != 0 {
-		return indent + "// UNSUPPORTED: " + line, true
+		return "// UNSUPPORTED: " + line, true
 	}
 	out, ok, err := translateOp(t, op, args)
 	if err != nil || !ok {
-		return indent + "// UNSUPPORTED: " + line, true
+		return "// UNSUPPORTED: " + line, true
 	}
 	if stackPair {
 		if op == "stp" {
@@ -43,10 +48,10 @@ func (t *Translator) TranslateInstruction(indent, line string) (string, bool) {
 			t.stack[stackKey] = mask
 		}
 		if stackMask != 0 && stackMask&^fixedRegMask(t.trustFixedRegs) == 0 {
-			return indent + "// c2go: dropped arm64 Go ABI reserved register save/restore: " + line, false
+			return "// c2go: dropped arm64 Go ABI reserved register save/restore: " + line, false
 		}
 	}
-	return indent + out, false
+	return out, false
 }
 
 func (t *Translator) savedMask() uint64 {

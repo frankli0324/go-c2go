@@ -131,7 +131,7 @@ func (b *asmFileBuilder) addInstruction(line string) error {
 	}
 	line = plan9LocalRefs(line)
 	b.current.body = append(b.current.body, "\t"+line)
-	b.ended = line == "RET"
+	b.ended = line == "RET" || strings.HasPrefix(line, "JMP ")
 	return nil
 }
 

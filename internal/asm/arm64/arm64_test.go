@@ -20,7 +20,7 @@ ldr x0, [x9, _foo@PAGEOFF]
 	)
 
 	var tr Translator
-	line, bad := tr.TranslateInstruction("", "ldr x0, [x8, :lo12:.LCPI0_0]")
+	line, bad := tr.TranslateInstruction("ldr x0, [x8, :lo12:.LCPI0_0]")
 	if !bad {
 		t.Fatalf("TranslateInstruction succeeded, want unsupported: %s", line)
 	}
@@ -163,7 +163,7 @@ func TestReservedRegistersRejected(t *testing.T) {
 		"adr x29, Ltmp0",
 	} {
 		var tr Translator
-		out, bad := tr.TranslateInstruction("", line)
+		out, bad := tr.TranslateInstruction(line)
 		if !bad {
 			t.Fatalf("TranslateInstruction(%q) = %q, want unsupported", line, out)
 		}
@@ -201,11 +201,11 @@ func TestSavedReservedRegisterAllowedUntilRestore(t *testing.T) {
 		"add x0, x26, x1",
 		"ldp x26, x25, [sp, #16]",
 	} {
-		if out, bad := tr.TranslateInstruction("", line); bad {
+		if out, bad := tr.TranslateInstruction(line); bad {
 			t.Fatalf("TranslateInstruction(%q) unsupported: %s", line, out)
 		}
 	}
-	if out, bad := tr.TranslateInstruction("", "add x0, x26, x1"); !bad {
+	if out, bad := tr.TranslateInstruction("add x0, x26, x1"); !bad {
 		t.Fatalf("TranslateInstruction allowed restored reserved register: %s", out)
 	}
 }
@@ -217,7 +217,7 @@ func TestDropFixedReservedSaveRestore(t *testing.T) {
 		"add x0, x26, x1",
 		"ldp x26, x25, [sp, #16]",
 	} {
-		out, bad := tr.TranslateInstruction("", line)
+		out, bad := tr.TranslateInstruction(line)
 		if bad {
 			t.Fatalf("TranslateInstruction(%q) unsupported: %s", line, out)
 		}
@@ -263,7 +263,7 @@ func translateARM64(t *testing.T, src string) string {
 	var out []string
 	tr := Translator{fullAddr: make(map[string]string)}
 	for _, line := range strings.Split(strings.TrimSpace(src), "\n") {
-		converted, bad := tr.TranslateInstruction("", strings.TrimSpace(line))
+		converted, bad := tr.TranslateInstruction(strings.TrimSpace(line))
 		if bad {
 			t.Fatalf("unsupported line %q -> %s", line, converted)
 		}

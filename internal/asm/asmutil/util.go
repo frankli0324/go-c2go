@@ -7,7 +7,8 @@ import (
 
 type Translator interface {
 	CommentPrefix() string
-	TranslateInstruction(indent, line string) (string, bool)
+	ResetState()
+	TranslateInstruction(line string) (string, bool)
 }
 
 func JoinInstruction(mnemonic string, operands []string) string {
